@@ -119,6 +119,10 @@ test("two participants record, one tab is killed and resumes, the collector outp
   await expect(guest.getByTestId("rec-badge")).toBeVisible();
   await expect(host.getByTestId("clap-prompt")).toBeVisible();
 
+  // a highlight flagged with the M key lands in the manifest of the host's tracks
+  await host.keyboard.press("m");
+  await expect(host.getByTestId("highlight-note")).toContainText(/1 so far/);
+
   // everybody sees who is recording
   await expect(guest.getByTestId("roster")).toContainText("Hanna");
   await expect(guest.locator('[data-state="recording"]')).toHaveCount(2);
@@ -184,6 +188,7 @@ test("two participants record, one tab is killed and resumes, the collector outp
   const hostAudio = hostEntry.tracks.filter((track) => track.kind === "audio");
   expect(hostAudio.map((track) => track.segment)).toEqual([1, 2]);
   expect(hostAudio[0]?.endReason).toBe("crash");
+  expect(hostAudio[0]?.markers.some((marker) => marker.kind === "highlight")).toBe(true);
   expect(hostAudio[1]?.endReason).toBe("stopped");
   // the guest was still recording when the host ended the session
   expect(guestEntry.tracks.find((track) => track.kind === "audio")?.endReason).toBe("sessionEnded");
@@ -216,6 +221,23 @@ test("two participants record, one tab is killed and resumes, the collector outp
   // Both participants started within a plausible window of each other on the server clock.
   const starts = [hostAudio[0], guestEntry.tracks.find((track) => track.kind === "audio")].map((track) => track?.startServerMsEstimated ?? 0);
   expect(Math.abs((starts[0] ?? 0) - (starts[1] ?? 0))).toBeLessThan(15_000);
+
+  // ---- post-production: media preparation, transcript (stand-in engine) and subtitle exports ----
+  await host.getByTestId("open-project").click();
+  await expect(host).toHaveURL(/\/project\//);
+  const create = host.getByTestId("pj-create");
+  if (await create.isVisible().catch(() => false)) await create.click();
+  await host.getByTestId("pj-prepare").click();
+  await expect(host.getByTestId("pj-conform-status")).toHaveAttribute("data-status", "done", { timeout: 180_000 });
+  await host.getByTestId("pj-tr-lang").selectOption("en");
+  await host.getByTestId("pj-tr-start").click();
+  await expect(host.getByTestId("pj-tr-status")).toHaveAttribute("data-status", "done", { timeout: 120_000 });
+  await expect(host.getByTestId("pj-transcript")).toContainText("Hello, world.");
+  await expect(host.getByTestId("pj-highlight")).toHaveCount(1); // the M press of the host
+  await host.getByTestId("pj-search").fill("world");
+  await expect(host.getByTestId("pj-search-count")).toContainText(/found/);
+  const srt = await host.evaluate(async (href) => (await fetch(href)).text(), (await host.getByTestId("pj-export-srt").getAttribute("href")) ?? "");
+  expect(srt).toMatch(/^1\n\d\d:\d\d:\d\d,\d{3} --> /);
 
   await mkdir(path.join(sessionDir), { recursive: true });
   await hostContext.close();

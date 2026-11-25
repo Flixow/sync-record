@@ -133,6 +133,7 @@ export class Room {
     this.uploader.subscribe(() => this.notify());
     window.addEventListener("beforeunload", this.onBeforeUnload);
     document.addEventListener("visibilitychange", this.onVisibility);
+    document.addEventListener("keydown", this.onKeyDown);
   }
 
   // ---- plumbing ----------------------------------------------------------
@@ -648,6 +649,7 @@ export class Room {
   /** Back to setup after a take: devices must be opened again. */
   async recordAnother(): Promise<void> {
     this.recorders = [];
+    this.highlights = [];
     this.phase = "setup";
     this.startedAtMs = null;
     this.lastPresence = "";
@@ -671,6 +673,30 @@ export class Room {
     const atClientMs = marker.atServerMs - this.clock.best().offsetMs;
     void this.markNow("host-beep", atClientMs);
   }
+
+  /** Highlights flagged on this device during the current take, as seconds since the take started. */
+  highlights: number[] = [];
+
+  /** Flags this moment in every active track (key M or the button); post-production uses it to suggest clips. */
+  async markHighlight(): Promise<void> {
+    const active = this.recorders.filter((recorder) => recorder.active);
+    if (active.length === 0) return;
+    const atClientMs = clientNowMs();
+    const id = `highlight-${Math.round(atClientMs)}`;
+    this.highlights.push((atClientMs - (this.startedAtMs ?? atClientMs)) / 1000);
+    for (const recorder of active) {
+      recorder.recording.meta.markers.push({ id, kind: "highlight", atClientMs, outputLatencyMs: null });
+      await recorder.recording.saveMeta();
+    }
+    this.notify();
+  }
+
+  private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key.toLowerCase() !== "m" || event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
+    const target = event.target;
+    if (target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
+    void this.markHighlight();
+  };
 
   async hostBeep(): Promise<void> {
     await unlockAudio();
@@ -727,6 +753,7 @@ export class Room {
 
   dispose(): void {
     this.disposed = true;
+    document.removeEventListener("keydown", this.onKeyDown);
     this.stopLevel?.();
     this.events?.close();
     this.clock.stopPeriodic();

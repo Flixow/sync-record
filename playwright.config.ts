@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { defineConfig } from "@playwright/test";
@@ -8,6 +7,8 @@ import { defineConfig } from "@playwright/test";
 // and stops everything again. Build first: `npm run build`.
 const port = Number(process.env.E2E_PORT ?? 18750);
 export const E2E_DATA_DIR = process.env.E2E_DATA_DIR ?? path.join(tmpdir(), `syncrecord-e2e-${port}`);
+/** Signing secret of the throw-away collector. A spec signs its own host token with it (tests that start from a prepared session on disk). */
+export const E2E_SECRET = "syncrecord-e2e-signing-secret-0123456789";
 
 export default defineConfig({
   testDir: "tests/e2e",
@@ -27,9 +28,12 @@ export default defineConfig({
     env: {
       HOST: "127.0.0.1",
       PORT: String(port),
-      TOKEN_SIGNING_SECRET: randomBytes(24).toString("hex"),
+      TOKEN_SIGNING_SECRET: E2E_SECRET,
       STORAGE_DRIVER: "local",
       STORAGE_LOCAL_DIR: E2E_DATA_DIR,
+      // post-production: a stand-in speech engine and a small disk threshold so a full laptop disk does not fail the run
+      ASR_PYTHON: path.resolve("tests/support/fake-asr.sh"),
+      POST_MIN_FREE_GB: "0",
     },
   },
 });

@@ -61,6 +61,8 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
     if (confirm(t("rec.stopConfirm"))) void room.stopMine("stopped");
   });
   const beepButton = button("host-beep", "btn", () => void room.hostBeep());
+  const highlightButton = button("mark-highlight", "btn", () => void room.markHighlight());
+  const highlightNote = h("p", { class: "hint", role: "status", "data-testid": "highlight-note" });
   const endButton = button("end-session", "btn btn-ghost", () => {
     if (confirm(t("rec.endConfirm"))) void room.endSession();
   });
@@ -132,6 +134,8 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
   hpUndoButton.textContent = t("hp.undo");
   stopButton.textContent = t("rec.stop");
   beepButton.textContent = t("rec.beep");
+  highlightButton.textContent = t("rec.highlight");
+  highlightButton.title = t("rec.highlightHint");
   beepButton.title = t("rec.beepHint");
   endButton.textContent = t("rec.end");
   anotherButton.textContent = t("fin.again");
@@ -149,7 +153,8 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
     liveStorageSlot,
     trackList,
     h("p", { class: "hint" }, t("rec.keepOpen")),
-    h("div", { class: "row" }, stopButton, beepButton, endButton),
+    h("div", { class: "row" }, highlightButton, stopButton, beepButton, endButton),
+    highlightNote,
   );
   setChildren(
     inviteBody,
@@ -262,6 +267,8 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
     timerEl.textContent = t("rec.elapsed", { time: formatDuration((clientNowMs() - (room.startedAtMs ?? clientNowMs())) / 1000) });
     beepButton.hidden = !room.isHost;
     endButton.hidden = !room.isHost;
+    const lastHighlight = room.highlights[room.highlights.length - 1];
+    highlightNote.textContent = lastHighlight === undefined ? t("rec.highlightHint") : t("rec.highlightLast", { time: formatDuration(lastHighlight), count: room.highlights.length });
     setChildren(
       clapSlot,
       clientNowMs() < room.clapUntilMs ? h("div", { class: "clap", role: "status", "data-testid": "clap-prompt" }, h("strong", {}, t("rec.clap.title")), h("p", {}, t("rec.clap.body"))) : null,
@@ -314,6 +321,9 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
         : null,
       h("div", { class: "row" }, refreshButton, forceButton),
       h("p", { class: "hint" }, t("res.forceHint")),
+      manifest && manifest.participants.every((p) => p.tracks.every((track) => track.status === "ok" || track.status === "failed"))
+        ? h("a", { class: "btn btn-primary", href: `/project/${room.sid}`, "data-testid": "open-project" }, t("pj.open"))
+        : null,
     );
   }
 

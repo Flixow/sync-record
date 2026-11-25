@@ -82,6 +82,17 @@ Everything is read from the environment (see `.env.example`). Nothing is hardcod
 | `STORAGE_LOCAL_DIR` | `./data` | Directory for the local driver. |
 | `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE` | empty | S3-compatible storage; the bucket and both keys are required when `STORAGE_DRIVER=s3`. |
 | `FFMPEG_PATH`, `FFPROBE_PATH` | `ffmpeg`, `ffprobe` | Where to find the tools. |
+| `POST_DIR` | `<STORAGE_LOCAL_DIR>/post` (`./post` with S3) | Local directory for post-production: projects, proxies, analysis files and exports (always local, also with the S3 driver). |
+| `POST_CONCURRENCY` | `1` | Post-production jobs that run at the same time. |
+| `POST_NICE` | `10` | Niceness of ffmpeg and speech-recognition child processes. |
+| `POST_THREADS` | `0` | Threads per child process; `0` lets the tool choose. |
+| `POST_MIN_FREE_GB` | `10` | A job is refused (HTTP 507) when the data directory has less free space than this. |
+| `POST_RETENTION` | `keep-exports` | `keep-exports` deletes proxies and intermediates after an export; `keep-all` keeps them. They can always be deleted per session. |
+| `LOUDNESS_LUFS`, `TRUE_PEAK_DBTP` | `-16`, `-1` | Default loudness target and true-peak ceiling of exports. |
+| `MODELS_DIR` | `<POST_DIR>/models` | Where speech models are downloaded on first use. Models never go into git. |
+| `ASR_PYTHON` | `python3` | A Python with `faster-whisper` installed (`pip install faster-whisper`); the transcript job runs it as a child process. |
+| `ASR_MODEL` | `deepdml/faster-whisper-large-v3-turbo-ct2` | faster-whisper model; `small` is a faster, less accurate choice (about 2.5x as fast; 17% instead of 7% word error rate on Polish). |
+| `LLM_URL`, `LLM_MODEL` | empty | Optional local OpenAI-compatible server (for example llama.cpp) used to re-rank clips and draft titles. Off by default; every feature works without it. |
 | `WEB_DIR` | `./dist/web` | Built web client. |
 
 ## Output
@@ -106,8 +117,127 @@ all samples taken during the recording, the sync markers, why the track ended (`
 `crash`, `forced`) and the duration measured after remux. Server time is `clientTimeMs + offsetMs`; the client clock is
 `performance.timeOrigin + performance.now()`.
 
-Drift between microphones and variable frame rate are **not** corrected here. The manifest carries what a
-post-production step needs to do that.
+Drift between microphones and variable frame rate are **not** corrected in the collector. The manifest carries what
+the post-production step needs to do that.
+
+## Post-production
+
+The host opens `/project/<session id>` from the results card. Opening it creates a project under `POST_DIR` and starts
+a **conform** job: every track is brought onto one timeline. Audio becomes 48 kHz mono FLAC with the start offset and the
+clock drift (measured from the handshake samples against the media duration; applied only for recordings of at least
+five minutes) removed, video becomes a 480p constant-frame-rate H.264 proxy, and waveform peaks and a level track are
+written next to them. The original recordings are never modified.
+
+Jobs run in a small persistent queue (`POST_DIR/<id>/jobs/*.json`). A job survives a collector restart: it is resumed
+(up to three attempts) or marked failed with a reason, and a leftover ffmpeg from the killed process is removed. Jobs
+refuse to start below `POST_MIN_FREE_GB` of free disk. Proxies and intermediates can be deleted per session from the
+project page.
+
+### Transcript and highlights
+
+**Transcribe** runs a local speech-to-text job (no cloud). Each track is searched for speech first (energy on the level
+track, and a track counts as speaking only when it is not just another speaker's voice leaking into its microphone), so
+silent stretches and bleed never reach the engine and a silent track produces no text. The engine is
+[faster-whisper](https://github.com/SYSTRAN/faster-whisper) with `large-v3-turbo` in int8 on the CPU; it needs a Python
+with `faster-whisper` installed (`ASR_PYTHON`) and downloads the model into `MODELS_DIR` on first use, never into the
+repository. Words carry their own start and end on the project timeline; words heard on two tracks at once are reduced to
+the louder one. The language is detected per project or set by hand. The transcript is searchable, click-to-seek, and
+exports as SRT, VTT or plain text (with or without speaker names). Pressing **M** (or the button) while recording drops
+a highlight marker into every active recording; the markers show up as chips above the transcript.
+
+Measured on this build's 10-minute test conversations (read speech, two speakers, 12 vCPU, no GPU): word error rate 5.0 %
+English and 7.0 % Polish; about 0.15-0.4x real time; 1.7 GB of memory. Word starts land within 100 ms of the reference
+for roughly 70 % (English) and 85 % (Polish) of the words, so cuts through words stay at the pause middle, never at a
+word edge.
+
+### Cutting
+
+The transcript on the project page is also the cutting tool. Click a word to play from it, shift-click or drag to select
+a stretch of words, then **Delete** (the key or the button), **Keep only** or **Restore**. Cuts go through the middle of
+the pauses around the words, removed words are struck through, and the player skips every removed part. **Silences**
+finds the pauses in which nobody speaks (minimum length and the gap to keep are adjustable), lists them for review with a
+per-silence preview (1.5 s before, the jump, 1.5 s after) and applies the checked ones as one undoable step. The strip
+above the transcript shows the combined waveform, the removed ranges, the highlights and the selection, and seeks on
+click or drag. Undo and redo are `Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z` and `Ctrl+Y`. The edit is saved a moment after every
+change as `POST_DIR/<id>/edl.json` (a save made from a stale copy is refused and the saved edit is loaded instead);
+nothing in the recordings changes. **Render preview** writes the audio with the cuts applied (`proxies/mix-cut.m4a`) so
+you can hear the real joins.
+
+### Export
+
+**Export** renders the edit to a file: YouTube 1080p30, 1080p60, 4K 30 and 4K 60 (H.264 High, 4:2:0, 2 B-frames, closed
+GOP of half a second, AAC 48 kHz stereo, `moov` first, no edit list) and audio-only MP3 or WAV. Audio is taken from the
+conformed tracks and normalised in two passes to `LOUDNESS_LUFS` (default -16) with a true peak limit of
+`TRUE_PEAK_DBTP` (default -1); video is taken from the original recording, conformed at full size, and cut at the same
+frames. Progress is shown, a running export can be cancelled (the ffmpeg process is stopped), and finished exports are
+listed with download and delete. With `POST_RETENTION=keep-exports` (default) the proxies are deleted after an export;
+open **Prepare** again to edit further. `POST_THREADS` bounds the encoder threads.
+
+On the project page the **Export** section lists the formats (video and audio groups) and shows the server's loudness
+target and true-peak limit under *Advanced*, where one camera can also be chosen instead of the layout's scenes. A bar
+shows the stage (loudness measurement, then encode) and **Cancel** stops the render. Finished exports are listed with
+size, length, measured loudness and a download link. After an export with the default retention the page says that the
+preview media were removed: the transcript, the cuts, the layout and the list of exports stay, the cuts can still be
+edited and undone, and **Prepare** brings playback back without losing the undo history.
+
+### Layouts and vertical video
+
+When a project has picture sources, the export is composed by one layout engine (`src/shared/layout.ts`) whose geometry
+the browser preview and the ffmpeg render both use. Layouts: solo, side by side, grid, speaker with thumbnails, and
+screen with camera. The canvas is 16:9, 9:16 (Shorts, Reels) or 1:1, filled or fitted, over a colour or a blurred copy of
+the picture. On 9:16 every picture stays inside the safe area, clear of the platform's title and buttons. **Active
+speaker** switching follows who is talking on their own microphone (a voice that only leaks into someone else's
+microphone does not count), with a minimum time on screen, hysteresis, a short hold after speech ends, and a rhythm
+(calm, balanced, lively). Manual scene edits are layered over the automatic ones, are saved separately (`scenes.json`) and
+can be undone or cleared.
+
+On the project page the **Layout** section drives a live preview above the player. It draws the layout engine's own
+geometry (the same percentages the render derives its crops from) with the 480p proxies and keeps every picture in step
+with the audio, frame exact while paused. Buttons pick the layout and the shape; how pictures fill their tile (automatic,
+fill or whole picture), the background (a colour, or a blurred copy of the featured picture with a strength slider), the
+rhythm, the shortest scene and what to show while nobody speaks are saved like the cuts. The scene list shows each scene
+with its layout and featured picture, marks the scenes changed by hand and resets them one at a time; the strip above the
+transcript marks the scene boundaries. The layout has its own undo and redo (`Ctrl/Cmd+Z` while the focus is inside the
+Layout section; elsewhere the same keys undo cuts). When the proxies have been removed the preview says so and the layout
+stays editable. `/project/<id>?hooks=1` exposes `window.__syncPreview.seekMs(ms)` for `scripts/bench-preview-ssim.ts`,
+which compares preview frames with the exported video (SSIM, gate 0.98 per frame).
+
+### Captions
+
+Exports can burn in captions (four presets, bundled Noto Sans, Polish diacritics included, word highlighting on two of
+them) laid out inside the safe area, and write matching `.srt` and `.vtt` files next to the video. Captions follow the
+cuts: removed words are dropped and times are moved onto the edited timeline. Rendering uses libass through ffmpeg; see
+`docs/captions.md`.
+
+### Audio cleanup
+
+Three optional steps run inside the export's one ffmpeg graph, on microphone tracks only. All are **off by default**:
+
+- **Level speakers**: one static gain per track (at most ±12 dB) so every voice sits at the same speech level.
+- **Bleed gate**: while another track is the clear speaker and this one is not, this track is attenuated (default -30 dB, ramps of 10 ms in and 80 ms out, 40 ms look-ahead so onsets stay intact). On the synthetic bleed fixtures it lowered bleed by at least 24 dB with no clipped onsets, but overlapping speech loses some frames and it has not been judged by ear, so use it for close-microphone sessions and listen first.
+- **Denoise**: RNNoise through `arnndn`. The model is not in the repository: `POST /api/sessions/<id>/project/audio/denoise-model` (the Denoise button in Export) downloads it once into `MODELS_DIR/rnnoise`, the only network call besides the speech model.
+
+Loudness is normalised after the cleanup, so the export still lands on the target. Details and measurements: [docs/audio-cleanup.md](docs/audio-cleanup.md).
+
+### Clips and publishing
+
+**Clips** proposes 20-90 second stretches that start and end on sentence boundaries, from a question and its answer, speech
+energy and pace, and the moments marked with M; each suggestion says why it was chosen. A clip is a child project with its
+own range and preset (vertical 1080x1920 by default); its start and end can be adjusted word by word and it is exported
+with the same renderer, captions included. **Publish** drafts chapters (checked against YouTube's rules: the first at
+00:00, at least three, ascending, at least ten seconds apart), three title variants and a description from the transcript,
+and picks thumbnail frames (3840x2160, or 2160x3840 for a Short, under 50 MB) with an optional text plate. All of it works
+without a language model. Setting `LLM_URL` to a local llama.cpp server enables an optional, per-request re-ranking of
+clips and rewriting of the draft; it is off by default and nothing leaves the machine.
+
+On the project page the **Clips** panel lists the suggestions with their reasons and a text excerpt; play a range, move its
+start or end one word at a time, save it, then render the saved clip (vertical 1080x1920 with captions by default) and
+find the file in the exports list. The **Export** panel gains burned-in captions in four styles (with captions on, .srt and
+.vtt files are also written next to a video) and audio cleanup (level the speakers, reduce bleed between microphones, reduce
+background noise); every option is off by default, and the noise model is downloaded only when you ask for it. The
+**Publish** panel shows the chapters with YouTube's rules checked and a copy button, the title and description draft, and a
+thumbnail picker (moment, video or Short shape, optional text) that ends with a picture you can download. The "local model"
+boxes of Clips and Publish are off by default and only act when `LLM_URL` is set.
 
 ## How it works
 
@@ -168,11 +298,22 @@ microphone, records a short session, cuts the guest's network for a few seconds 
 the host's renderer mid-recording, reopens the session to resume the upload, ends the session while the guest is still
 recording and checks that the output files are seekable, decodable and described by a valid manifest.
 
+`tests/e2e/editor.spec.ts` starts from a synthetic session written to the collector's storage (it needs `ffmpeg`), signs
+a host token with the fixed `E2E_SECRET` of `playwright.config.ts`, and drives the cutting tools on the project page:
+prepare, transcribe with a stand-in speech engine, delete, undo and redo, reload, silences, preview render. It needs no
+fake media devices, so any Chromium works, also one attached with `E2E_CDP_URL`.
+
+`tests/e2e/export.spec.ts` renders an MP3 of an edited program from the page, downloads it and checks its length against
+the kept time, checks that the player, transcript and cuts survive the removal of the preview media after the export, and
+deletes the export. `tests/e2e/layout.spec.ts` uses a two-camera session: it changes the layout, shape and background
+and checks the live preview's geometry, edits and resets a scene by hand, undoes the layout with the keyboard, reloads,
+seeks the preview with the test hook, cancels a 4K export and renders a vertical one.
+
 It launches Chromium itself, so install one first (`npx playwright install chromium`) or pick an installed browser with
-`E2E_BROWSER_CHANNEL=chrome`. To attach to a Chromium you started yourself, set `E2E_CDP_URL`; it must have been
-started with the flags in `FAKE_MEDIA_ARGS` (see `tests/e2e/session.spec.ts`). The test runs with one worker because
-both participants share the machine. The guest also shares a screen (the browser must auto-select a capture
-source, which `FAKE_MEDIA_ARGS` does); set `E2E_SCREEN=0` to leave the screen track out.
+`E2E_BROWSER_CHANNEL=chrome`. To attach to a Chromium you started yourself, set `E2E_CDP_URL`; for `session.spec.ts` it
+must have been started with the flags in `FAKE_MEDIA_ARGS` (see `tests/e2e/session.spec.ts`). The test runs with one
+worker because both participants share the machine. The guest also shares a screen (the browser must auto-select a
+capture source, which `FAKE_MEDIA_ARGS` does); set `E2E_SCREEN=0` to leave the screen track out.
 
 ## Limits and honest notes
 
