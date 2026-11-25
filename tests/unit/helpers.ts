@@ -6,6 +6,7 @@ import path from "node:path";
 import { createApp, type App } from "../../src/server/app.js";
 import { loadConfig, type Config } from "../../src/server/config.js";
 import { LocalStorage } from "../../src/server/storage/local.js";
+import type { AsrEngine } from "../../src/server/post/asr.js";
 
 export const SECRET = "unit-test-secret-0123456789";
 
@@ -30,11 +31,11 @@ export interface TestServer {
   close: () => Promise<void>;
 }
 
-export async function startServer(extra: Record<string, string> = {}): Promise<TestServer> {
+export async function startServer(extra: Record<string, string> = {}, asr?: AsrEngine): Promise<TestServer> {
   const dir = await mkdtemp(path.join(tmpdir(), "syncrecord-unit-"));
   const config = testConfig(dir, extra);
   const storage = new LocalStorage(config.localDir);
-  const app = createApp(config, storage);
+  const app = createApp(config, storage, asr);
   await new Promise<void>((resolve) => app.server.listen(0, "127.0.0.1", resolve));
   const address = app.server.address();
   if (typeof address !== "object" || address === null) throw new Error("no address");
@@ -45,6 +46,7 @@ export async function startServer(extra: Record<string, string> = {}): Promise<T
     storage,
     close: async () => {
       await app.collector.idle();
+      await app.post.close();
       app.collector.close();
       app.server.closeAllConnections();
       await new Promise<void>((resolve) => app.server.close(() => resolve()));

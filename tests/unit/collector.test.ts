@@ -196,6 +196,21 @@ describe("chunk intake with resume", () => {
     server = await startServer(); // so afterEach has something to close
   });
 
+  it("stores highlight markers flagged during recording and refuses unknown marker kinds", async () => {
+    const { put, host, url } = await track();
+    await put(0, Buffer.from("HEADER"));
+    const finalize = (kind: string) =>
+      api(server, "POST", `${url}/finalize`, {
+        token: host.participantToken,
+        json: { ...finalizeBody(6), markers: [{ id: "h-1", kind, atClientMs: 1_002_000, outputLatencyMs: null }] },
+      });
+    expect((await finalize("applause")).status).toBe(400);
+    expect((await finalize("highlight")).status).toBe(200);
+    const manifest = await api(server, "GET", `/api/sessions/${host.sessionId}/manifest`, { token: host.participantToken });
+    const tracks = (manifest.body as { participants: { tracks: { markers: { kind: string; atServerMsEstimated: number }[] }[] }[] }).participants[0]?.tracks;
+    expect(tracks?.[0]?.markers[0]).toMatchObject({ kind: "highlight", atServerMsEstimated: 1_002_025 });
+  });
+
   it("does not let one participant touch another's track", async () => {
     const { host, url, trackId } = await track();
     const guest = (await api(server, "POST", `/api/sessions/${host.sessionId}/join`, { token: host.inviteToken, json: { name: "Guest" } })).body as { participantToken: string };

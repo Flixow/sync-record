@@ -6,6 +6,9 @@ import { MAX_PARTICIPANTS, type DeclareTrackRequest, type FinalizeRequest, type 
 import { Collector } from "./collector.js";
 import type { Config } from "./config.js";
 import { HttpError } from "./errors.js";
+import { postRoutes } from "./post/api.js";
+import type { AsrEngine } from "./post/asr.js";
+import { PostProduction } from "./post/index.js";
 import type { Storage } from "./storage/index.js";
 import { verifyToken, type TokenClaims } from "./tokens.js";
 import * as v from "./validate.js";
@@ -38,10 +41,12 @@ const CSP = [
 export interface App {
   server: Server;
   collector: Collector;
+  post: PostProduction;
 }
 
-export function createApp(config: Config, storage: Storage): App {
+export function createApp(config: Config, storage: Storage, asr?: AsrEngine): App {
   const collector = new Collector(config, storage);
+  const post = new PostProduction(config, storage, asr);
   const server = createServer((req, res) => {
     void handle(req, res).catch((error: unknown) => fail(res, error));
   });
@@ -189,6 +194,12 @@ export function createApp(config: Config, storage: Storage): App {
       return;
     }
 
+    if (rest[0] === "project") {
+      host(req, url, sid);
+      if (await postRoutes(post, { json, readJson }, req, res, sid, rest.slice(1))) return;
+      throw new HttpError(404, "not_found");
+    }
+
     if (rest[0] === "tracks") {
       if (method === "POST" && rest.length === 1) {
         const body = await readJson(req);
@@ -280,5 +291,5 @@ export function createApp(config: Config, storage: Storage): App {
     await serveStatic(req, res, url);
   }
 
-  return { server, collector };
+  return { server, collector, post };
 }

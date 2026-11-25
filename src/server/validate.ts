@@ -1,4 +1,4 @@
-import { ID_PATTERN, TRACK_KINDS, type ClockSample, type EndReason, type MarkerRecord, type TrackKind } from "../shared/protocol.js";
+import { ID_PATTERN, MARKER_KINDS, TRACK_KINDS, type ClockSample, type EndReason, type MarkerRecord, type TrackKind } from "../shared/protocol.js";
 import { HttpError } from "./errors.js";
 
 const bad = (field: string): HttpError => new HttpError(400, "invalid_field", { field });
@@ -55,10 +55,10 @@ export function markers(value: unknown, field: string): MarkerRecord[] {
   return value.map((item) => {
     const o = asObject(item);
     const markerKind = o.kind;
-    if (markerKind !== "start-beep" && markerKind !== "host-beep") throw bad(field);
+    if (typeof markerKind !== "string" || !(MARKER_KINDS as readonly string[]).includes(markerKind)) throw bad(field);
     return {
       id: str(o.id, field, 64),
-      kind: markerKind,
+      kind: markerKind as MarkerRecord["kind"],
       atClientMs: num(o.atClientMs, field),
       outputLatencyMs: o.outputLatencyMs === null ? null : num(o.outputLatencyMs, field),
     };

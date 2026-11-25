@@ -8,7 +8,7 @@ async function main(): Promise<void> {
   if (!(await checkFfmpeg(config.ffmpegPath))) {
     console.warn(`warning: '${config.ffmpegPath}' is not runnable; sessions will record but tracks cannot be remuxed (set FFMPEG_PATH)`);
   }
-  const { server, collector } = createApp(config, createStorage(config));
+  const { server, collector, post } = createApp(config, createStorage(config));
   server.listen(config.port, config.host, () => {
     console.log(`syncrecord collector listening on http://${config.host}:${config.port} (storage: ${config.storageDriver})`);
   });
@@ -17,7 +17,7 @@ async function main(): Promise<void> {
     console.log("shutting down");
     collector.close();
     server.close(() => {
-      void collector.idle().then(() => process.exit(0));
+      void Promise.all([collector.idle(), post.close()]).then(() => process.exit(0));
     });
     server.closeAllConnections();
   };

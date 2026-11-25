@@ -15,6 +15,10 @@ export class LocalStorage implements Storage {
     return full;
   }
 
+  localPath(key: string): string {
+    return this.resolve(key);
+  }
+
   async put(key: string, data: Buffer): Promise<void> {
     const target = this.resolve(key);
     await mkdir(path.dirname(target), { recursive: true });
