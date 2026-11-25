@@ -217,29 +217,59 @@ export function chapterTitles(topic: { s: number; e: number }, words: Transcript
 
 const wholeSeconds = (ms: number): number => Math.floor(ms / 1000);
 
+/** What is wrong with a chapter list; `chapter` is the 1-based number of the chapter the issue is about (for "not-ascending" and "too-close", the later one of the pair). */
+export type ChapterIssue =
+  | { code: "too-few"; count: number }
+  | { code: "bad-start"; chapter: number }
+  | { code: "no-title"; chapter: number }
+  | { code: "first-not-zero" }
+  | { code: "not-ascending"; chapter: number }
+  | { code: "too-close"; chapter: number }
+  | { code: "last-too-short" };
+
+/** The English message of an issue, as `validateChapters` lists it in `errors`. */
+export function describeChapterIssue(issue: ChapterIssue): string {
+  switch (issue.code) {
+    case "too-few":
+      return `needs at least ${MIN_CHAPTERS} chapters, got ${issue.count}`;
+    case "bad-start":
+      return `chapter ${issue.chapter} has an invalid start`;
+    case "no-title":
+      return `chapter ${issue.chapter} has no title`;
+    case "first-not-zero":
+      return "the first chapter must start at 00:00";
+    case "not-ascending":
+      return `chapter ${issue.chapter} does not start after chapter ${issue.chapter - 1}`;
+    case "too-close":
+      return `chapters ${issue.chapter - 1} and ${issue.chapter} are less than 10 s apart`;
+    case "last-too-short":
+      return "the last chapter must be at least 10 s long";
+  }
+}
+
 /**
  * YouTube turns a description into chapters only when: the first chapter is at 00:00, there are at least three, they ascend
  * and each is at least 10 s long (so the last one starts at least 10 s before the end). Times are judged in whole seconds,
- * as they are written.
+ * as they are written. `errors` are the English messages of `issues`.
  */
-export function validateChapters(chapters: Chapter[], durationMs: number): { ok: boolean; errors: string[] } {
-  const errors: string[] = [];
-  if (chapters.length < MIN_CHAPTERS) errors.push(`needs at least ${MIN_CHAPTERS} chapters, got ${chapters.length}`);
+export function validateChapters(chapters: Chapter[], durationMs: number): { ok: boolean; errors: string[]; issues: ChapterIssue[] } {
+  const issues: ChapterIssue[] = [];
+  if (chapters.length < MIN_CHAPTERS) issues.push({ code: "too-few", count: chapters.length });
   chapters.forEach((chapter, index) => {
-    if (!Number.isFinite(chapter.startMs) || chapter.startMs < 0) errors.push(`chapter ${index + 1} has an invalid start`);
-    if (chapter.title.trim() === "") errors.push(`chapter ${index + 1} has no title`);
+    if (!Number.isFinite(chapter.startMs) || chapter.startMs < 0) issues.push({ code: "bad-start", chapter: index + 1 });
+    if (chapter.title.trim() === "") issues.push({ code: "no-title", chapter: index + 1 });
   });
   const first = chapters[0];
-  if (first && wholeSeconds(first.startMs) !== 0) errors.push("the first chapter must start at 00:00");
+  if (first && wholeSeconds(first.startMs) !== 0) issues.push({ code: "first-not-zero" });
   for (let i = 1; i < chapters.length; i++) {
     const previous = wholeSeconds((chapters[i - 1] as Chapter).startMs);
     const current = wholeSeconds((chapters[i] as Chapter).startMs);
-    if (current <= previous) errors.push(`chapter ${i + 1} does not start after chapter ${i}`);
-    else if ((current - previous) * 1000 < MIN_CHAPTER_GAP_MS) errors.push(`chapters ${i} and ${i + 1} are less than 10 s apart`);
+    if (current <= previous) issues.push({ code: "not-ascending", chapter: i + 1 });
+    else if ((current - previous) * 1000 < MIN_CHAPTER_GAP_MS) issues.push({ code: "too-close", chapter: i + 1 });
   }
   const last = chapters[chapters.length - 1];
-  if (last && Number.isFinite(durationMs) && durationMs - wholeSeconds(last.startMs) * 1000 < MIN_CHAPTER_GAP_MS) errors.push("the last chapter must be at least 10 s long");
-  return { ok: errors.length === 0, errors };
+  if (last && Number.isFinite(durationMs) && durationMs - wholeSeconds(last.startMs) * 1000 < MIN_CHAPTER_GAP_MS) issues.push({ code: "last-too-short" });
+  return { ok: issues.length === 0, errors: issues.map(describeChapterIssue), issues };
 }
 
 const pad2 = (value: number): string => String(value).padStart(2, "0");

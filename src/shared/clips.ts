@@ -576,6 +576,17 @@ export function adjustRange(range: { s: number; e: number }, words: TranscriptWo
   return e > s ? { s, e } : { s: range.s, e: range.e };
 }
 
+/**
+ * The in point ("s") or out point ("e") of a range moved by `steps` words (negative: earlier), as a change for adjustRange
+ * and adjustClip. Stops at the first and the last word of the transcript.
+ */
+export function wordStep(range: { s: number; e: number }, words: TranscriptWord[], edge: "s" | "e", steps: number): { sMs: number } | { eMs: number } {
+  const values = [...new Set(normalizeWords(words).map((word) => (edge === "s" ? word.s : word.e)))].sort((a, b) => a - b);
+  const at = values.indexOf(nearest(values, range[edge], edge === "s" ? "start" : "end"));
+  const to = at < 0 ? range[edge] : (values[Math.min(values.length - 1, Math.max(0, at + steps))] as number);
+  return edge === "s" ? { sMs: to } : { eMs: to };
+}
+
 /** A suggestion with new in and out points (see adjustRange); its title and speakers follow the new range, its score and reasons stay. */
 export function adjustClip(clip: ClipSuggestion, words: TranscriptWord[], change: { sMs?: number; eMs?: number }): ClipSuggestion {
   const range = adjustRange(clip, words, change);

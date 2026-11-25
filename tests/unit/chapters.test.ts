@@ -141,7 +141,7 @@ describe("YouTube chapter rules", () => {
   ];
 
   it("accepts a valid list", () => {
-    expect(validateChapters(ok, 200_000)).toEqual({ ok: true, errors: [] });
+    expect(validateChapters(ok, 200_000)).toEqual({ ok: true, errors: [], issues: [] });
   });
 
   it("reports each broken rule", () => {
@@ -155,6 +155,17 @@ describe("YouTube chapter rules", () => {
     expect(first(ok, 135_000).join()).toMatch(/last chapter/);
     expect(first([{ startMs: 0, title: "a" }, { startMs: 20_000, title: " " }, { startMs: 60_000, title: "c" }]).join()).toMatch(/no title/);
     expect(validateChapters(ok, 140_000).ok).toBe(true);
+  });
+
+  it("lists the same problems as codes a screen can translate", () => {
+    const issues = (chapters: Chapter[], duration = 200_000): unknown[] => validateChapters(chapters, duration).issues;
+    expect(issues(ok.slice(0, 2))).toEqual([{ code: "too-few", count: 2 }]);
+    expect(issues([{ startMs: 1000, title: "a" }, ...ok.slice(1)])).toEqual([{ code: "first-not-zero" }]);
+    expect(issues([ok[0] as Chapter, { startMs: 80_000, title: "b" }, { startMs: 70_000, title: "c" }])).toEqual([{ code: "not-ascending", chapter: 3 }]);
+    expect(issues([ok[0] as Chapter, { startMs: 5000, title: "b" }, { startMs: 70_000, title: "c" }])).toEqual([{ code: "too-close", chapter: 2 }]);
+    expect(issues(ok, 135_000)).toEqual([{ code: "last-too-short" }]);
+    expect(issues([{ startMs: 0, title: "a" }, { startMs: 20_000, title: " " }, { startMs: 60_000, title: "c" }])).toEqual([{ code: "no-title", chapter: 2 }]);
+    expect(validateChapters(ok.slice(0, 2), 200_000).errors).toEqual(["needs at least 3 chapters, got 2"]);
   });
 
   it("measures the gaps in whole seconds, as they are written", () => {
@@ -174,14 +185,14 @@ describe("chapters for YouTube", () => {
   it("returns a valid list for a talk, with and without an EDL", () => {
     const { words, endMs } = talk(EN_TOPICS, 45);
     const plain = chaptersForYoutube(words, endMs);
-    expect(validateChapters(plain, endMs)).toEqual({ ok: true, errors: [] });
+    expect(validateChapters(plain, endMs)).toEqual({ ok: true, errors: [], issues: [] });
     expect(plain).toHaveLength(3);
     expect(plain.every((chapter) => chapter.startMs % 1000 === 0)).toBe(true);
 
     const edl: Edl = { removed: normalize([{ s: 100_000, e: 150_000 }, { s: 300_000, e: 320_000 }], endMs) };
     const cut = chaptersForYoutube(words, endMs, edl);
     const outputMs = keptDuration(edl, endMs);
-    expect(validateChapters(cut, outputMs)).toEqual({ ok: true, errors: [] });
+    expect(validateChapters(cut, outputMs)).toEqual({ ok: true, errors: [], issues: [] });
     expect(cut.at(-1)?.startMs as number).toBeLessThanOrEqual(outputMs - 10_000);
     // the topics keep their order and titles; later chapters moved earlier by the cuts
     expect(cut.map((chapter) => chapter.title)).toHaveLength(cut.length);
@@ -234,7 +245,7 @@ describe("chapters for YouTube", () => {
         for (const input of [[], words]) {
           const chapters = chaptersForYoutube(input, duration, edl);
           if (outputMs < 30_000) expect(chapters).toEqual([]);
-          else expect(validateChapters(chapters, outputMs), `${duration} ${JSON.stringify(edl.removed)}`).toEqual({ ok: true, errors: [] });
+          else expect(validateChapters(chapters, outputMs), `${duration} ${JSON.stringify(edl.removed)}`).toEqual({ ok: true, errors: [], issues: [] });
         }
       }
     }

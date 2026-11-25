@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adjustClip, adjustRange, clipText, clipToEdl, normalizeWords, REASON_TEXT, snapToSentence, snapToWord, splitSentences, suggestClips, type ClipSuggestion } from "../../src/shared/clips.js";
+import { adjustClip, adjustRange, clipText, clipToEdl, normalizeWords, REASON_TEXT, snapToSentence, snapToWord, splitSentences, suggestClips, wordStep, type ClipSuggestion } from "../../src/shared/clips.js";
 import { keptRanges } from "../../src/shared/edl.js";
 import type { TranscriptWord } from "../../src/shared/transcript.js";
 import { random, script, SPEAKERS, type Line } from "../support/talk.js";
@@ -376,6 +376,23 @@ describe("clips as projects", () => {
     expect(crossed.e).toBe(range.e);
     expect(crossed.e - crossed.s).toBeGreaterThanOrEqual(1000);
     expect(adjustRange(range, [], { sMs: 5 })).toEqual(range);
+  });
+
+  it("steps an in or out point word by word and stops at the ends of the transcript", () => {
+    const clean = normalizeWords(words);
+    const range = { s: (clean[10] as TranscriptWord).s, e: (clean[30] as TranscriptWord).e };
+    expect(wordStep(range, words, "s", -1)).toEqual({ sMs: (clean[9] as TranscriptWord).s });
+    expect(wordStep(range, words, "s", 2)).toEqual({ sMs: (clean[12] as TranscriptWord).s });
+    expect(wordStep(range, words, "e", -1)).toEqual({ eMs: (clean[29] as TranscriptWord).e });
+    expect(wordStep(range, words, "e", 1)).toEqual({ eMs: (clean[31] as TranscriptWord).e });
+    expect(wordStep({ s: (clean[0] as TranscriptWord).s, e: range.e }, words, "s", -1)).toEqual({ sMs: (clean[0] as TranscriptWord).s });
+    const last = clean[clean.length - 1] as TranscriptWord;
+    expect(wordStep({ s: range.s, e: last.e }, words, "e", 1)).toEqual({ eMs: last.e });
+    expect(wordStep(range, [], "e", 1)).toEqual({ eMs: range.e });
+    // the step goes through adjustRange like any other change
+    const next = adjustRange(range, words, wordStep(range, words, "s", 1));
+    expect(next.s).toBe((clean[11] as TranscriptWord).s);
+    expect(next.e).toBe(range.e);
   });
 
   it("keeps the score and reasons of an adjusted suggestion and follows the new range with title and speakers", () => {
