@@ -1,0 +1,17 @@
+# Example only. Copy to docker-compose.yml, create .env from .env.example, then:
+#   docker compose up --build
+services:
+  collector:
+    build: .
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      STORAGE_LOCAL_DIR: /data
+    ports:
+      - "8080:8080"
+    volumes:
+      - recordings:/data
+    restart: unless-stopped
+
+volumes:
+  recordings:
