@@ -21,6 +21,8 @@ export function bestSample(samples: readonly ClockSample[]): ClockSample | null 
 
 export class ClockSync {
   readonly samples: ClockSample[] = [];
+  /** Called with every sample taken after the handshake (periodic and final samples). */
+  onSample: ((sample: ClockSample) => void) | null = null;
   private timer: number | null = null;
 
   constructor(private readonly fetchClock: () => Promise<ClockResponse>) {}
@@ -53,8 +55,16 @@ export class ClockSync {
   startPeriodic(everyMs = 60_000): void {
     this.stopPeriodic();
     this.timer = window.setInterval(() => {
-      void this.sampleOnce().catch(() => undefined);
+      void this.sampleOnce()
+        .then((sample) => this.onSample?.(sample))
+        .catch(() => undefined);
     }, everyMs);
+  }
+
+  /** One more sample for the end of a recording; never waits longer than `timeoutMs`. */
+  async finalSample(timeoutMs = 1500): Promise<void> {
+    const sample = await Promise.race([this.sampleOnce(), new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs))]).catch(() => null);
+    if (sample) this.onSample?.(sample);
   }
 
   stopPeriodic(): void {

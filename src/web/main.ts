@@ -1,5 +1,5 @@
 import "./styles.css";
-import { forgetCredentials, loadCredentials } from "./lib/api.js";
+import { loadCredentials } from "./lib/api.js";
 import { Room } from "./lib/room.js";
 import { initLang, onLangChange } from "./i18n/index.js";
 import { homeView } from "./views/home.js";
@@ -50,9 +50,7 @@ async function render(): Promise<void> {
   if (!room || room.sid !== sid) {
     disposeRoom();
     room = new Room(sid, credentials);
-    void room.init().then(() => {
-      if (room?.fatal === "invalid") forgetCredentials(sid);
-    });
+    void room.init();
   }
   const view = roomView(room);
   roomUnsubscribe?.();

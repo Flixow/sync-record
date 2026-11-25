@@ -47,6 +47,15 @@ describe("sessions and access", () => {
     expect(view.body).toMatchObject({ ended: false, maxParticipants: 4 });
   });
 
+  it("renews the caller's token on every visit and keeps the host role", async () => {
+    const host = await session();
+    const view = await api(server, "GET", `/api/sessions/${host.sessionId}`, { token: host.participantToken });
+    const renewed = view.body.renewedToken as string;
+    expect(renewed).toBeTruthy();
+    const manifest = await api(server, "GET", `/api/sessions/${host.sessionId}/manifest`, { token: renewed });
+    expect(manifest.status).toBe(200); // the renewed token is still a host token
+  });
+
   it("lets an invite join, refuses the fifth participant and keeps invite and participant roles apart", async () => {
     const host = await session();
     for (const name of ["B", "C", "D"]) {
@@ -86,6 +95,36 @@ describe("sessions and access", () => {
     const { serverRecvMs, serverSendMs } = clock.body as { serverRecvMs: number; serverSendMs: number };
     expect(serverSendMs).toBeGreaterThanOrEqual(serverRecvMs);
     expect(Math.abs(serverRecvMs - Date.now())).toBeLessThan(5000);
+  });
+});
+
+describe("clock in the manifest", () => {
+  it("falls back to the best later sample when the handshake before the start could not run", async () => {
+    const host = await session();
+    const base = `/api/sessions/${host.sessionId}`;
+    const trackId = "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee";
+    await api(server, "POST", `${base}/tracks`, {
+      token: host.participantToken,
+      json: { ...declare(trackId), offsetMs: 0, rttMs: 1e9, clockSamples: [{ atClientMs: 1_000_500, offsetMs: 31, rttMs: 12 }] },
+    });
+    const manifest = (await api(server, "GET", `${base}/manifest`, { token: host.participantToken })).body as {
+      participants: { tracks: { startClientMs: number; startServerMsEstimated: number; clock: { offsetMs: number; uncertaintyMs: number | null } }[] }[];
+    };
+    const [item] = manifest.participants[0]?.tracks ?? [];
+    expect(item?.clock.offsetMs).toBe(31);
+    expect(item?.clock.uncertaintyMs).toBe(6);
+    expect(item?.startServerMsEstimated).toBe((item?.startClientMs ?? 0) + 31);
+  });
+
+  it("reports an unknown uncertainty when no usable sample exists", async () => {
+    const host = await session();
+    const base = `/api/sessions/${host.sessionId}`;
+    const trackId = "cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee";
+    await api(server, "POST", `${base}/tracks`, { token: host.participantToken, json: { ...declare(trackId), offsetMs: 0, rttMs: 1e9, clockSamples: [] } });
+    const manifest = (await api(server, "GET", `${base}/manifest`, { token: host.participantToken })).body as {
+      participants: { tracks: { clock: { uncertaintyMs: number | null } }[] }[];
+    };
+    expect(manifest.participants[0]?.tracks[0]?.clock.uncertaintyMs).toBeNull();
   });
 });
 

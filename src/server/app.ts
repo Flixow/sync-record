@@ -145,7 +145,7 @@ export function createApp(config: Config, storage: Storage): App {
     const who = participant(req, url, sid);
 
     if (method === "GET" && rest.length === 0) {
-      json(res, 200, await collector.view(sid));
+      json(res, 200, await collector.view(sid, who.pid));
       return;
     }
     if (method === "GET" && rest.length === 1 && rest[0] === "events") {
@@ -235,7 +235,12 @@ export function createApp(config: Config, storage: Storage): App {
 
   async function serveStatic(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     if (req.method !== "GET" && req.method !== "HEAD") throw new HttpError(405, "method_not_allowed");
-    let relative = decodeURIComponent(url.pathname);
+    let relative: string;
+    try {
+      relative = decodeURIComponent(url.pathname);
+    } catch {
+      throw new HttpError(400, "bad_path");
+    }
     const root = config.webDir;
     let target = path.resolve(root, `.${relative}`);
     if (target !== root && !target.startsWith(root + path.sep)) throw new HttpError(404, "not_found");

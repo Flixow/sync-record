@@ -40,7 +40,7 @@ function parseObject(text: string): Record<string, unknown> {
 async function call<T>(
   method: string,
   path: string,
-  options: { token?: string; json?: unknown; body?: ArrayBuffer; headers?: Record<string, string> } = {},
+  options: { token?: string; json?: unknown; body?: ArrayBuffer; headers?: Record<string, string>; timeoutMs?: number } = {},
 ): Promise<T> {
   const headers: Record<string, string> = { ...options.headers };
   if (options.token) headers.authorization = `Bearer ${options.token}`;
@@ -51,7 +51,8 @@ async function call<T>(
   } else if (options.body) {
     body = options.body;
   }
-  const response = await fetch(path, { method, headers, body });
+  // A stalled connection must fail (and be retried) instead of hanging forever.
+  const response = await fetch(path, { method, headers, body, signal: AbortSignal.timeout(options.timeoutMs ?? 30_000) });
   if (response.status === 204) return undefined as T;
   const text = await response.text();
   const parsed = parseObject(text);
@@ -70,7 +71,7 @@ export const publicApi = {
 export class SessionApi {
   constructor(
     readonly sid: string,
-    readonly token: string,
+    public token: string,
   ) {}
 
   private path(suffix = ""): string {
@@ -78,7 +79,7 @@ export class SessionApi {
   }
 
   view = () => call<SessionView>("GET", this.path(), { token: this.token });
-  clock = () => call<ClockResponse>("POST", this.path("/clock"), { token: this.token });
+  clock = () => call<ClockResponse>("POST", this.path("/clock"), { token: this.token, timeoutMs: 4000 });
   status = (request: StatusRequest) => call<void>("POST", this.path("/status"), { token: this.token, json: request });
   marker = () => call<MarkerEvent>("POST", this.path("/markers"), { token: this.token, json: {} });
   end = (force: boolean) => call<Manifest>("POST", this.path("/end"), { token: this.token, json: { force } });

@@ -8,7 +8,7 @@
   Every voice at full quality, recorded locally. One clean track per person, collected by a small server you run yourself.
 </p>
 
-SyncRecord is for podcasts and interviews held over a call (Google Meet, Zoom, anything). The call is only used for
+SyncRecord is for podcasts and interviews held over a call (Google Meet or any call app). The call is only used for
 talking. Each participant opens a SyncRecord link in their own browser and records their own microphone, camera and
 optionally their screen **on their own computer**, so the quality never depends on the connection. The files are
 uploaded in the background to a collector you host. After the session the collector remuxes every track and writes a
@@ -73,7 +73,7 @@ Everything is read from the environment (see `.env.example`). Nothing is hardcod
 | `TOKEN_SIGNING_SECRET` | required | At least 16 characters. Signs invite and participant tokens. |
 | `SESSION_CREATE_KEY` | empty | When set, creating a session requires this key. Use it on any public deployment. |
 | `HOST`, `PORT` | `127.0.0.1`, `8080` | Listen address. |
-| `TOKEN_TTL_HOURS` | `72` | Lifetime of invite and participant tokens. |
+| `TOKEN_TTL_HOURS` | `72` | Lifetime of invite and participant tokens. A participant token is renewed every time the participant opens the session page. |
 | `MAX_UPLOAD_BYTES` | `16777216` | Largest accepted upload request. |
 | `STORAGE_DRIVER` | `local` | `local` or `s3`. |
 | `STORAGE_LOCAL_DIR` | `./data` | Directory for the local driver. |
@@ -161,14 +161,15 @@ npm run check        # typecheck, lint, unit tests
 
 `npm run test:e2e` builds nothing by itself: run `npm run build` first. It starts the built collector on port 18750
 (`E2E_PORT` to change it) with a throw-away data directory, opens two isolated browser contexts with fake camera and
-microphone, records a short session, kills one tab mid-recording, reopens it to resume the upload, ends the session and
-checks that the output files are seekable, decodable and described by a valid manifest.
+microphone, records a short session, cuts the guest's network for a few seconds (uploads retry, then resume), crashes
+the host's renderer mid-recording, reopens the session to resume the upload, ends the session while the guest is still
+recording and checks that the output files are seekable, decodable and described by a valid manifest.
 
 It launches Chromium itself, so install one first (`npx playwright install chromium`) or pick an installed browser with
 `E2E_BROWSER_CHANNEL=chrome`. To attach to a Chromium you started yourself, set `E2E_CDP_URL`; it must have been
 started with the flags in `FAKE_MEDIA_ARGS` (see `tests/e2e/session.spec.ts`). The test runs with one worker because
-both participants share the machine. Set `E2E_SCREEN=1` to add a screen track for the guest (needs a browser that can
-auto-select a capture source).
+both participants share the machine. The guest also shares a screen (the browser must auto-select a capture
+source, which `FAKE_MEDIA_ARGS` does); set `E2E_SCREEN=0` to leave the screen track out.
 
 ## Limits and honest notes
 
@@ -181,6 +182,11 @@ auto-select a capture source).
   shows each track as ready.
 - The S3-compatible driver stores every uploaded part as its own object and streams the remuxed files with multipart
   upload. It needs a real endpoint to be tried; the automated tests use the local driver.
+- Only one browser tab per session and device can record; a second tab is asked to wait until the first one is closed.
+- A participant who joins twice (for example after clearing site data) uses up a second place; there is no way to remove
+  a participant in v1.
+- Remuxing browser output with `-c copy` can log `non monotonically increasing dts` warnings for variable frame rate
+  screen captures. The files stay valid and seekable; drift and frame-rate fixes belong to post-production.
 - A single collector process owns a session; running several replicas against one bucket is not supported.
 
 ## Licence

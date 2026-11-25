@@ -137,6 +137,11 @@ export class Uploader {
         }
       } catch (error) {
         if (this.cancelled.has(id)) return;
+        if (error instanceof ApiError && (error.code === "track_finalized" || error.code === "session_ended")) {
+          // The host already closed this track (or the session): retrying cannot succeed. The local copy stays.
+          this.set(id, { phase: "stopped", uploaded, error: error.code });
+          return;
+        }
         const message = error instanceof Error ? error.message : "upload failed";
         this.set(id, { phase: "retrying", uploaded, error: message });
         await Promise.race([sleep(backoff), new Promise<void>((resolve) => window.addEventListener("online", () => resolve(), { once: true }))]);

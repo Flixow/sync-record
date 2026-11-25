@@ -9,7 +9,7 @@ export interface DeviceLabel {
 export type HeadphoneGuess = "likely" | "unlikely" | "unknown" | "undetermined";
 
 const HEADPHONE_WORDS =
-  /airpods|headphone|headset|earbud|earphone|earpods|\bbuds\b|słuchawk|sluchawk|kopfh|casque|auricular|cuffie|wh-1000|wf-1000|quietcomfort|bose|jabra|beats|arctis|hyperx|steelseries/i;
+  /airpods|headphone|headset|earbud|earphone|earpods|\bbuds\b|słuchawk|sluchawk|kopfh|casque|auricular|cuffie|wh-1000|wf-1000|quietcomfort|arctis/i;
 const SPEAKER_WORDS = /speaker|głośnik|glosnik|built-in|builtin|macbook|display audio|monitor|hdmi|realtek|lautsprecher|haut-parleur/i;
 
 /**

@@ -22,7 +22,7 @@ interface ManifestTrack {
   startClientMs: number;
   startServerMsEstimated: number;
   bytesReceived: number;
-  clock: { offsetMs: number; uncertaintyMs: number; samples: unknown[] };
+  clock: { offsetMs: number; uncertaintyMs: number | null; samples: unknown[] };
   markers: { kind: string }[];
 }
 interface Manifest {
@@ -109,7 +109,7 @@ test("two participants record, one tab is killed and resumes, the collector outp
 
   // ---- both set up; nothing records before the click ----
   await setUp(host);
-  await setUp(guest, { screen: process.env.E2E_SCREEN === "1" });
+  await setUp(guest, { screen: process.env.E2E_SCREEN !== "0" });
   await expect(host.getByTestId("roster")).toContainText("Bartek");
   await expect(host.getByTestId("roster")).not.toContainText("recording");
 
@@ -127,8 +127,17 @@ test("two participants record, one tab is killed and resumes, the collector outp
   await expect(host.getByTestId("track-audio")).toHaveAttribute("data-upload", /uploading|waiting/);
   await host.waitForTimeout(6000);
 
-  // ---- the host tab is killed mid-recording ----
-  await host.close();
+  // ---- the guest loses the network for a while: uploads retry, then resume where they stopped ----
+  await guestContext.setOffline(true);
+  await expect(guest.getByTestId("track-audio")).toHaveAttribute("data-upload", "retrying", { timeout: 30_000 });
+  await guestContext.setOffline(false);
+  await expect(guest.getByTestId("track-audio")).toHaveAttribute("data-upload", /uploading|waiting/, { timeout: 60_000 });
+
+  // ---- the host renderer crashes mid-recording (not a clean close) ----
+  const crashed = new Promise<void>((resolve) => host.once("crash", () => resolve()));
+  await host.goto("chrome://crash").catch(() => undefined); // kills the renderer process: no unload handlers, no final flush
+  await Promise.race([crashed, host.waitForTimeout(5000)]);
+  await host.close().catch(() => undefined);
   await guest.waitForTimeout(2000);
   await expect(guest.locator('[data-state="recording"]')).toHaveCount(2); // the roster still shows it, flagged as lost
   await expect(guest.getByTestId("roster")).toContainText(/connection lost/i);
@@ -137,7 +146,7 @@ test("two participants record, one tab is killed and resumes, the collector outp
   host = await hostContext.newPage();
   dialogs(host);
   await host.goto(`/join/${sessionId}`);
-  await expect(host.getByTestId("recovered")).toBeVisible();
+  // (the "recovered" banner may already be gone: it hides itself once the uploads are complete)
   await expect(host.getByTestId("local-audio")).toHaveAttribute("data-complete", "true", { timeout: 60_000 });
   await expect(host.getByTestId("local-camera")).toHaveAttribute("data-complete", "true", { timeout: 60_000 });
   // the local copy is still there after the upload
@@ -149,10 +158,12 @@ test("two participants record, one tab is killed and resumes, the collector outp
   await expect(host.getByTestId("rec-badge")).toBeVisible();
   await host.waitForTimeout(3000);
 
-  // ---- guest stops; host ends the session for everyone ----
-  await guest.getByTestId("stop-recording").click();
-  await expect(guest.getByTestId("finished-done")).toBeVisible({ timeout: 60_000 });
+  // ---- the host stops and ends the session while the guest is still recording ----
+  await host.getByTestId("stop-recording").click();
+  await expect(host.getByTestId("finished-done")).toBeVisible({ timeout: 60_000 });
   await host.getByTestId("end-session").click();
+  await expect(guest.getByTestId("session-ended")).toBeVisible({ timeout: 30_000 });
+  await expect(guest.getByTestId("finished-done")).toBeVisible({ timeout: 60_000 });
   await expect(host.getByTestId("results")).toBeVisible();
   await expect(host.locator('[data-testid="results"] [data-status="ok"]').first()).toBeVisible({ timeout: 90_000 });
   await expect(host.locator('[data-testid="results"] [data-status="pending"], [data-testid="results"] [data-status="receiving"], [data-testid="results"] [data-status="failed"]')).toHaveCount(0, { timeout: 90_000 });
@@ -173,7 +184,9 @@ test("two participants record, one tab is killed and resumes, the collector outp
   const hostAudio = hostEntry.tracks.filter((track) => track.kind === "audio");
   expect(hostAudio.map((track) => track.segment)).toEqual([1, 2]);
   expect(hostAudio[0]?.endReason).toBe("crash");
-  expect(hostAudio[1]?.endReason).toBe("sessionEnded");
+  expect(hostAudio[1]?.endReason).toBe("stopped");
+  // the guest was still recording when the host ended the session
+  expect(guestEntry.tracks.find((track) => track.kind === "audio")?.endReason).toBe("sessionEnded");
   expect(hostEntry.tracks.some((track) => track.kind === "camera" && track.segment === 2)).toBe(true);
 
   for (const participant of manifest.participants) {
@@ -183,8 +196,10 @@ test("two participants record, one tab is killed and resumes, the collector outp
       expect(track.bytesReceived).toBeGreaterThan(0);
       expect(track.clock.samples.length).toBeGreaterThan(0);
       expect(track.markers.some((marker) => marker.kind === "start-beep")).toBe(true);
-      // the start time is the client start moved by the handshake offset
-      expect(track.startServerMsEstimated - track.startClientMs).toBeCloseTo(track.clock.offsetMs, 3);
+      // Both browsers run on this machine as the collector does, so the handshake must find almost no offset.
+      expect(Math.abs(track.clock.offsetMs)).toBeLessThan(1000);
+      expect(track.clock.uncertaintyMs ?? Infinity).toBeLessThan(250);
+      expect(Math.abs(track.startServerMsEstimated - Date.now())).toBeLessThan(10 * 60_000);
 
       const file = path.join(sessionDir, participant.participantId, track.file ?? "missing");
       const probe = ffprobe(file);
@@ -195,6 +210,9 @@ test("two participants record, one tab is killed and resumes, the collector outp
       execFileSync("ffmpeg", ["-v", "error", "-ss", String(Math.max(0.5, probe.duration / 2)), "-i", file, "-t", "0.5", "-f", "null", "-"]);
     }
   }
+  // The guest also shared a (fake) screen: it is a third, separate track.
+  if (process.env.E2E_SCREEN !== "0") expect(guestEntry.tracks.map((track) => track.kind).sort()).toEqual(["audio", "camera", "screen"]);
+
   // Both participants started within a plausible window of each other on the server clock.
   const starts = [hostAudio[0], guestEntry.tracks.find((track) => track.kind === "audio")].map((track) => track?.startServerMsEstimated ?? 0);
   expect(Math.abs((starts[0] ?? 0) - (starts[1] ?? 0))).toBeLessThan(15_000);

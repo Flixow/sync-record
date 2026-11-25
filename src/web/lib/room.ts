@@ -8,7 +8,7 @@ import {
   type ServerEvent,
   type TrackKind,
 } from "../../shared/protocol.js";
-import { ApiError, SessionApi, type StoredCredentials } from "./api.js";
+import { ApiError, SessionApi, saveCredentials, type StoredCredentials } from "./api.js";
 import { playBeep, unlockAudio } from "./audio.js";
 import { ClockSync, clientNowMs } from "./clock.js";
 import {
@@ -46,6 +46,8 @@ export interface StorageInfo {
   free: number;
 }
 
+/** Round trip recorded when the clock handshake could not run; the manifest treats it as "offset unknown". */
+export const UNKNOWN_RTT_MS = 1e9;
 const LOCK_PREFIX = "syncrecord:session:";
 
 /**
@@ -73,6 +75,8 @@ export class Room {
   level = 0;
   previewCamera: MediaStream | null = null;
   headphones: Headphones = "unset";
+  /** True while the ticked box came from the device-name guess, not from the user. */
+  headphonesAuto = false;
   guess: { guess: HeadphoneGuess; matched: string | null } = { guess: "unknown", matched: null };
   bleed: { verdict: BleedVerdict; riseDb: number } | null = null;
   bleedBusy = false;
@@ -86,6 +90,11 @@ export class Room {
   recorders: TrackRecorder[] = [];
   recordings: LocalRecording[] = [];
   recoveredCount = 0;
+  private recoveredIds = new Set<string>();
+  /** True while a recovered recording still waits for its upload to finish. */
+  get recoveryPending(): boolean {
+    return this.recordings.some((rec) => this.recoveredIds.has(rec.meta.recordingId) && !rec.meta.complete);
+  }
   startedAtMs: number | null = null;
   clapUntilMs = 0;
   results: Manifest | null = null;
@@ -114,6 +123,13 @@ export class Room {
     this.api = new SessionApi(sid, creds.participantToken);
     this.uploader = new Uploader(this.api);
     this.clock = new ClockSync(() => this.api.clock());
+    // Samples taken while recording go into every active recording, so a crash keeps them.
+    this.clock.onSample = (sample) => {
+      for (const recorder of this.recorders.filter((r) => r.active)) {
+        recorder.recording.meta.clockSamples.push(sample);
+        void recorder.recording.saveMeta();
+      }
+    };
     this.uploader.subscribe(() => this.notify());
     window.addEventListener("beforeunload", this.onBeforeUnload);
     document.addEventListener("visibilitychange", this.onVisibility);
@@ -147,6 +163,11 @@ export class Room {
     if (this.wantCamera && this.devices.cameras.length > 0) kinds.push("camera");
     if (this.wantScreen) kinds.push("screen");
     return kinds;
+  }
+
+  /** Recordings of this participant on this device that are not fully uploaded yet. */
+  get unfinishedRecordings(): LocalRecording[] {
+    return this.recordings.filter((rec) => !rec.meta.complete);
   }
 
   get recordingKinds(): TrackKind[] {
@@ -209,23 +230,23 @@ export class Room {
 
   async init(): Promise<void> {
     if (this.missingFeatures.length > 0) return this.notify();
-    await this.acquireLock(false);
+    await this.acquireLock();
     if (this.lock !== "held") return this.notify();
     await this.afterLock();
   }
 
-  /** Called by "Use this tab": takes the lock from the other tab. */
-  async takeLock(): Promise<void> {
-    await this.acquireLock(true);
+  /** "Try again" after the user closed the other tab. The lock is never taken from a tab that may still be recording. */
+  async retryLock(): Promise<void> {
+    await this.acquireLock();
     if (this.lock === "held") await this.afterLock();
     this.notify();
   }
 
-  private async acquireLock(steal: boolean): Promise<void> {
+  private async acquireLock(): Promise<void> {
     // A tab that just crashed may still hold the lock for a moment: retry before giving up.
-    for (let attempt = 0; attempt < (steal ? 1 : 6); attempt += 1) {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
       const acquired = await new Promise<boolean>((resolve) => {
-        void navigator.locks.request(LOCK_PREFIX + this.sid, steal ? { steal: true } : { ifAvailable: true }, (lock) => {
+        void navigator.locks.request(LOCK_PREFIX + this.sid, { ifAvailable: true }, (lock) => {
           if (!lock) {
             resolve(false);
             return undefined;
@@ -248,14 +269,20 @@ export class Room {
   private async afterLock(): Promise<void> {
     try {
       const view = await this.api.view();
+      if (view.renewedToken) this.api.token = view.renewedToken; // sliding expiry: every visit renews the token
       this.roster = view.roster;
       this.ended = view.ended;
     } catch (error) {
       if (error instanceof ApiError && (error.status === 401 || error.status === 403)) this.fatal = "invalid";
       else if (error instanceof ApiError && error.status === 404) this.fatal = "notFound";
       else this.notice("error", t("err.server"));
-      if (this.fatal) return this.notify();
+      if (this.fatal) {
+        // Local copies stay reachable (download or delete) even when the token is no longer accepted.
+        this.recordings = (await LocalRecording.list(this.sid).catch(() => [])).filter((rec) => rec.meta.participantId === this.creds.participantId);
+        return this.notify();
+      }
     }
+    if (this.api.token !== this.creds.participantToken) saveCredentials(this.sid, { ...this.creds, participantToken: this.api.token });
     void this.clock.handshake().then(() => this.notify()).catch(() => this.notice("error", t("err.server")));
     this.connectEvents();
     await this.recoverRecordings();
@@ -306,7 +333,7 @@ export class Room {
   /** Finds recordings left in OPFS (also from a tab that was killed) and resumes their upload. */
   private async recoverRecordings(): Promise<void> {
     try {
-      this.recordings = await LocalRecording.list(this.sid);
+      this.recordings = (await LocalRecording.list(this.sid)).filter((rec) => rec.meta.participantId === this.creds.participantId);
     } catch (error) {
       this.notice("warn", t("err.generic", { message: error instanceof Error ? error.message : "OPFS" }));
       return;
@@ -325,6 +352,7 @@ export class Room {
       this.uploader.add(recording);
     }
     this.recoveredCount = unfinished;
+    this.recoveredIds = new Set(this.recordings.filter((rec) => !rec.meta.complete).map((rec) => rec.meta.recordingId));
   }
 
   // ---- devices -----------------------------------------------------------
@@ -337,7 +365,14 @@ export class Room {
     }
     // Re-run on every device change: the guess depends on what is plugged in.
     this.guess = guessHeadphones([...this.devices.mics, ...this.devices.outputs].map((d) => ({ kind: d.kind, label: d.label })));
-    if (this.headphones === "unset" && this.guess.guess === "likely" && this.missingFeatures.length === 0) this.headphones = "yes";
+    if (this.headphones === "unset" && this.guess.guess === "likely") {
+      this.headphones = "yes";
+      this.headphonesAuto = true;
+    } else if (this.headphonesAuto && this.headphones === "yes" && this.guess.guess !== "likely") {
+      // The device that made us tick the box is gone (unplugged): hand the decision back to the user.
+      this.headphones = "unset";
+      this.headphonesAuto = false;
+    }
     if (!this.devices.mics.some((d) => d.deviceId === this.micId)) this.micId = "";
     if (!this.devices.cameras.some((d) => d.deviceId === this.camId)) this.camId = "";
     this.notify();
@@ -418,6 +453,7 @@ export class Room {
 
   setHeadphones(value: Headphones): void {
     this.headphones = value;
+    this.headphonesAuto = false;
     this.notify();
   }
 
@@ -429,6 +465,10 @@ export class Room {
     try {
       await unlockAudio();
       this.bleed = await measureBleed(this.micStream);
+      if (this.bleed.verdict === "bleed" && this.headphones === "yes" && this.headphonesAuto) {
+        this.headphones = "unset"; // the measurement contradicts the guess
+        this.headphonesAuto = false;
+      }
     } finally {
       this.bleedBusy = false;
       this.notify();
@@ -495,8 +535,16 @@ export class Room {
 
       // Clock handshake right before the recorders start: the start time of each
       // track is converted to server time with this offset.
-      await this.clock.handshake(5);
-      const best = this.clock.best();
+      let best: { offsetMs: number; rttMs: number };
+      try {
+        await this.clock.handshake(5);
+        best = this.clock.best();
+      } catch {
+        // Local-first: an unreachable collector must not stop the recording. The offset is marked
+        // unknown (huge round trip) and later periodic samples let post-production fix the start time.
+        best = this.clock.hasSamples() ? this.clock.best() : { offsetMs: 0, rttMs: UNKNOWN_RTT_MS };
+        this.notice("warn", t("err.clockUnavailable"));
+      }
       const samples = this.clock.samples.slice(-5);
       const make = (kind: TrackKind, stream: MediaStream): Promise<TrackRecorder> =>
         TrackRecorder.start({
@@ -590,6 +638,7 @@ export class Room {
   }
 
   async stopMine(reason: EndReason = "stopped"): Promise<void> {
+    if (this.recordingKinds.length > 0) await this.clock.finalSample();
     await Promise.all(this.recorders.filter((recorder) => recorder.active).map((recorder) => recorder.stop(reason)));
     if (this.phase === "recording") this.finishRecording();
     if (this.ended) this.phase = "finished";

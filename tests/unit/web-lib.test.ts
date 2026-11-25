@@ -29,7 +29,7 @@ describe("headphone guess", () => {
 
   it("recognises common headphone names, in English and Polish", () => {
     expect(guessHeadphones([{ kind: "audiooutput", label: "Default - AirPods Pro" }]).guess).toBe("likely");
-    expect(guessHeadphones([{ kind: "audioinput", label: "Jabra Evolve 40" }]).guess).toBe("likely");
+    expect(guessHeadphones([{ kind: "audioinput", label: "Jabra Evolve 40 Headset" }]).guess).toBe("likely");
     expect(guessHeadphones([{ kind: "audiooutput", label: "Słuchawki (Realtek Audio)" }]).guess).toBe("likely");
   });
 

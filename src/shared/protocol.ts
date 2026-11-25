@@ -42,6 +42,8 @@ export interface SessionView {
   ended: boolean;
   maxParticipants: number;
   roster: RosterEntry[];
+  /** A fresh token with a new expiry for the caller (sliding expiry: every visit renews it). */
+  renewedToken: string;
 }
 
 export interface CreateSessionRequest {
@@ -141,7 +143,8 @@ export interface ManifestTrack {
     convention: "serverTimeMs = clientTimeMs + offsetMs";
     offsetMs: number;
     rttMs: number;
-    uncertaintyMs: number;
+    /** Half the round trip of the chosen sample; null when the handshake could not run before the start. */
+    uncertaintyMs: number | null;
     samples: ClockSample[];
   };
   markers: (MarkerRecord & { atServerMsEstimated: number })[];

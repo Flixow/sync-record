@@ -65,10 +65,13 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
     if (confirm(t("rec.endConfirm"))) void room.endSession();
   });
   const anotherButton = button("record-another", "btn btn-primary", () => void room.recordAnother());
-  const forceButton = button("force-end", "btn btn-small btn-ghost", () => void room.endSession(true));
+  const forceButton = button("force-end", "btn btn-small btn-ghost", () => {
+    const waiting = (room.results?.participants ?? []).filter((p) => p.tracks.some((track) => track.status === "receiving")).map((p) => p.displayName);
+    if (confirm(t("res.forceConfirm", { names: waiting.length > 0 ? waiting.join(", ") : "-" }))) void room.endSession(true);
+  });
   const refreshButton = button("refresh-results", "btn btn-small", () => void room.pollResults());
   const copyButton = button("copy-invite", "btn btn-small", () => undefined);
-  const takeLockButton = button("take-lock", "btn btn-small", () => void room.takeLock());
+  const retryLockButton = button("retry-lock", "btn btn-small", () => void room.retryLock());
   const inviteInput = h("input", { type: "text", readonly: true, "data-testid": "invite-link" });
   inviteInput.addEventListener("focus", () => inviteInput.select());
   const copiedNote = h("span", { class: "hint", role: "status" });
@@ -111,6 +114,11 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
     h("section", { class: "step" }, h("h3", {}, t("st.title")), storageBody),
     h("section", { class: "step" }, h("h3", {}, t("consent.title")), consentBlock, startBody),
   );
+  const setupEndButton = button("end-session-setup", "btn btn-small btn-ghost", () => {
+    if (confirm(t("rec.endConfirm"))) void room.endSession();
+  });
+  setupEndButton.textContent = t("rec.end");
+  setupCard.append(h("div", { class: "row end-row" }, setupEndButton));
   const recordingCard = card(null, recordingBody);
   const finishedCard = card(t("fin.title"), finishedBody);
   const resultsCard = card(t("res.title"), h("p", { class: "hint" }, t("res.body")), resultsList);
@@ -128,10 +136,9 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
   endButton.textContent = t("rec.end");
   anotherButton.textContent = t("fin.again");
   forceButton.textContent = t("res.force");
-  forceButton.title = t("res.forceHint");
   refreshButton.textContent = t("res.refresh");
   copyButton.textContent = t("room.invite.copy");
-  takeLockButton.textContent = t("room.lock.take");
+  retryLockButton.textContent = t("room.lock.retry");
   meter.setAttribute("aria-label", t("setup.level"));
 
   // ---- static layout --------------------------------------------------------
@@ -197,7 +204,7 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
             "div",
             { class: "stack" },
             h("label", { class: "check", for: "hp-confirm" }, hpCheck, h("span", {}, t("hp.confirm"))),
-            h("p", { class: "hint", "data-testid": "hp-guess" }, t(`hp.guess.${room.guess.guess}`)),
+            h("p", { class: "hint", "data-testid": "hp-guess" }, t(room.guess.guess === "likely" && !room.headphonesAuto ? "hp.guess.found" : `hp.guess.${room.guess.guess}`, { device: room.guess.matched ?? "" })),
             h("div", { class: "row" }, hpTestButton, hpSkipButton),
             room.permission !== "granted" ? h("p", { class: "hint" }, t("hp.testNeedsMic")) : null,
             room.bleed
@@ -270,11 +277,13 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
   }
 
   function updateFinished(): void {
-    const mine = currentRecordings();
-    const allDone = mine.length > 0 && mine.every((rec) => rec.meta.complete);
+    const mine = [...room.recordings].sort((a, b) => a.meta.startClientMs - b.meta.startClientMs || KIND_ORDER.indexOf(a.meta.kind) - KIND_ORDER.indexOf(b.meta.kind));
+    const allDone = mine.every((rec) => rec.meta.complete);
     setChildren(
       finishedBody,
-      banner(allDone ? "ok" : "info", allDone ? t("fin.done") : t("fin.uploading"), allDone ? "finished-done" : "finished-uploading"),
+      mine.length === 0
+        ? banner("info", t("fin.nothing"), "finished-nothing")
+        : banner(allDone ? "ok" : "info", allDone ? t("fin.done") : t("fin.uploading"), allDone ? "finished-done" : "finished-uploading"),
       mine.length > 0 ? h("ul", { class: "plain-list" }, ...mine.map((rec) => trackRow(rec, false))) : null,
       room.ended ? null : anotherButton,
       room.isHost && !room.ended ? endButton : null,
@@ -304,6 +313,7 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
           )
         : null,
       h("div", { class: "row" }, refreshButton, forceButton),
+      h("p", { class: "hint" }, t("res.forceHint")),
     );
   }
 
@@ -391,10 +401,10 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
     if (room.fatal === "invalid") blocks.push(banner("error", t("join.invalid"), "fatal"));
     if (room.fatal === "notFound") blocks.push(banner("error", t("join.notFound"), "fatal"));
     if (room.lock === "blocked") {
-      blocks.push(h("div", { class: "banner banner-warn", "data-testid": "lock-blocked" }, h("strong", {}, t("room.lock.title")), h("p", {}, t("room.lock.body")), takeLockButton));
+      blocks.push(h("div", { class: "banner banner-warn", "data-testid": "lock-blocked" }, h("strong", {}, t("room.lock.title")), h("p", {}, t("room.lock.body")), retryLockButton));
     }
     if (room.ended && room.phase !== "setup") blocks.push(banner("info", t("room.ended"), "session-ended"));
-    if (room.recoveredCount > 0) blocks.push(banner("info", t("local.recovered", { count: room.recoveredCount }), "recovered"));
+    if (room.recoveryPending) blocks.push(banner("info", t("local.recovered", { count: room.recoveredCount }), "recovered"));
     if (!room.online) blocks.push(banner("warn", t("err.server"), "offline"));
     for (const notice of room.notices) {
       const el = banner(notice.kind, notice.text, "notice");
@@ -407,13 +417,18 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
 
     const usable = room.missingFeatures.length === 0 && !room.fatal && room.lock === "held";
     setupCard.hidden = !(usable && room.phase === "setup");
+    setupEndButton.hidden = !room.isHost || room.ended;
     recordingCard.hidden = !(usable && room.phase === "recording");
     finishedCard.hidden = !(usable && room.phase === "finished");
     resultsCard.hidden = !(usable && room.isHost && room.ended);
     rosterCard.hidden = !usable;
-    localCard.hidden = !usable;
+    // Local copies stay reachable (download, delete) even when the token expired.
+    localCard.hidden = !(room.missingFeatures.length === 0 && room.lock === "held");
     inviteCard.hidden = true;
-    if (!usable) return;
+    if (!usable) {
+      if (!localCard.hidden) updateLocal();
+      return;
+    }
 
     if (room.phase === "setup") {
       updateDevices();

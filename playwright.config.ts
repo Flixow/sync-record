@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { defineConfig } from "@playwright/test";
@@ -26,7 +27,7 @@ export default defineConfig({
     env: {
       HOST: "127.0.0.1",
       PORT: String(port),
-      TOKEN_SIGNING_SECRET: "e2e-only-secret-not-for-real-use",
+      TOKEN_SIGNING_SECRET: randomBytes(24).toString("hex"),
       STORAGE_DRIVER: "local",
       STORAGE_LOCAL_DIR: E2E_DATA_DIR,
     },

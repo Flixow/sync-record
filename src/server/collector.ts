@@ -129,9 +129,11 @@ export class Collector {
     return { sessionId: sid, participantId: participant.id, participantToken: this.participantToken(sid, participant) };
   }
 
-  async view(sid: string): Promise<SessionView> {
+  async view(sid: string, pid: string): Promise<SessionView> {
     const runtime = await this.load(sid);
+    const caller = this.participant(runtime, pid);
     return {
+      renewedToken: this.participantToken(sid, caller),
       sessionId: sid,
       ended: runtime.record.endedAtMs !== null,
       maxParticipants: MAX_PARTICIPANTS,
