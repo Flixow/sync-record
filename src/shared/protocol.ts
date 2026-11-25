@@ -20,11 +20,16 @@ export interface ClockSample {
   rttMs: number;
 }
 
+export const MARKER_KINDS = ["start-beep", "host-beep", "highlight"] as const;
+export type MarkerKind = (typeof MARKER_KINDS)[number];
+
 export interface MarkerRecord {
   id: string;
-  kind: "start-beep" | "host-beep";
-  /** Client clock instant at which the beep was scheduled to start playing, in ms. */
+  /** Beeps are sync marks; a highlight is a moment a participant flagged while recording (key M or the button). */
+  kind: MarkerKind;
+  /** Client clock instant at which the beep was scheduled to start playing, or at which the highlight was flagged, in ms. */
   atClientMs: number;
+  /** Output latency of a beep; null for a highlight. */
   outputLatencyMs: number | null;
 }
 
