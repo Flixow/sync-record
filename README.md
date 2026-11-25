@@ -62,7 +62,10 @@ docker build -t sync-record .
 docker run --env-file .env -e HOST=0.0.0.0 -p 8080:8080 -v syncrecord-data:/data sync-record
 ```
 
-`docker-compose.example.yml` shows the same as a compose file.
+`docker-compose.example.yml` shows the same as a compose file: copy it to `docker-compose.yml`, create `.env` as above and
+run `docker compose up --build`. The image listens on 8080, runs as the unprivileged `node` user and keeps recordings in
+the `/data` volume (a bind mount must be writable by uid 1000). The Dockerfile builds with the classic builder as well as
+BuildKit. The compose example sets no resource limits; add `mem_limit` (and `memswap_limit`) to the service if the host is shared.
 
 ## Configuration
 
@@ -181,7 +184,8 @@ source, which `FAKE_MEDIA_ARGS` does); set `E2E_SCREEN=0` to leave the screen tr
 - Local copies live in the browser's origin storage. Clearing site data deletes them, so keep them until the collector
   shows each track as ready.
 - The S3-compatible driver stores every uploaded part as its own object and streams the remuxed files with multipart
-  upload. It needs a real endpoint to be tried; the automated tests use the local driver.
+  upload. The automated tests use the local driver; the driver was also tried once end to end (a two-person session,
+  remuxed tracks and manifest written to the bucket) against a local SeaweedFS S3 gateway with path-style addressing.
 - Only one browser tab per session and device can record; a second tab is asked to wait until the first one is closed.
 - A participant who joins twice (for example after clearing site data) uses up a second place; there is no way to remove
   a participant in v1.
@@ -190,5 +194,8 @@ source, which `FAKE_MEDIA_ARGS` does); set `E2E_SCREEN=0` to leave the screen tr
 - A single collector process owns a session; running several replicas against one bucket is not supported.
 
 ## Licence
+
+The fonts and the backdrop photo are third-party assets with their own licences, listed in
+[THIRD_PARTY.md](THIRD_PARTY.md).
 
 MIT, see [LICENSE](LICENSE).

@@ -19,6 +19,8 @@ const MIME: Record<string, string> = {
   ".png": "image/png",
   ".ico": "image/x-icon",
   ".woff2": "font/woff2",
+  ".webp": "image/webp",
+  ".txt": "text/plain; charset=utf-8",
 };
 
 const CSP = [
