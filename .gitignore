@@ -1,0 +1,31 @@
+# dependencies and build output
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+
+# environment and secrets (only .env.example is tracked)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# runtime data (recordings are personal data)
+data/
+*.webm
+*.mkv
+*.mp4
+
+# test and tool output
+test-results/
+playwright-report/
+blob-report/
+.cache/
+.vite/
+
+# editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.log
