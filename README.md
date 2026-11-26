@@ -86,7 +86,7 @@ Everything is read from the environment (see `.env.example`). Nothing is hardcod
 | `TOKEN_SIGNING_SECRET` | required | At least 16 characters. Signs invite and participant tokens. |
 | `SESSION_CREATE_KEY` | empty | When set, creating a session requires this key. Use it on any public deployment. |
 | `HOST`, `PORT` | `127.0.0.1`, `8080` | Listen address. |
-| `TOKEN_TTL_HOURS` | `72` | Lifetime of invite and participant tokens. A participant token is renewed every time the participant opens the session page. |
+| `TOKEN_TTL_HOURS` | `72` | Lifetime of invite and participant tokens. A participant token is renewed every time the participant opens the session page; the host's invite link is renewed the same way, so it stays valid while the host keeps coming back. |
 | `MAX_UPLOAD_BYTES` | `16777216` | Largest accepted upload request. |
 | `STORAGE_DRIVER` | `local` | `local` or `s3`. |
 | `STORAGE_LOCAL_DIR` | `./data` | Directory for the local driver. |
@@ -295,14 +295,18 @@ Off by default. Nothing is sent, no connection is opened and the build contains 
 repository, the web bundle and the Docker image carry neither; the browser never talks to PostHog (there is no PostHog SDK
 in the web app, so there is no autocapture, no session recording and no page-view tracking).
 
-When enabled, the server sends exactly these events, each as one request to `POSTHOG_HOST/capture/`, fire-and-forget with a
+When enabled, the server sends exactly these events (session lifecycle and errors only), each as one request to `POSTHOG_HOST/capture/`, fire-and-forget with a
 3 s timeout:
 
 | Event | Properties |
 | --- | --- |
-| `server_started` | `version` of the program |
 | `session_created` | none |
-| `session_ended` | `participants` (a number) |
+| `session_joined` | `participants` (a number, including the host) |
+| `recording_started` | `audio`, `camera`, `screen` (three booleans: which kinds the participant records) |
+| `recording_stopped` | none |
+| `session_ended` | `participants` (a number); sent once per session |
+| `project_ready` | none (the post-production project finished preparing its media) |
+| `remux_failed` | none (a track could not be turned into its final file) |
 | `job_failed` | `kind` of the post-production job (for example `transcribe`) |
 | `server_error` | `error`: class name of an unexpected request error, not its message |
 

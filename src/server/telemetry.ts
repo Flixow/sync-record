@@ -12,9 +12,16 @@ export interface TelemetrySettings {
 
 /** Every event that can leave the process, with the only properties it may carry. Nothing else can be sent. */
 export interface TelemetryEvents {
-  server_started: { version: string };
   session_created: Record<string, never>;
+  session_joined: { participants: number };
+  /** Which kinds of track the participant records; no more than three booleans. */
+  recording_started: { audio: boolean; camera: boolean; screen: boolean };
+  recording_stopped: Record<string, never>;
   session_ended: { participants: number };
+  /** The post-production project of a session finished conforming and can be edited. */
+  project_ready: Record<string, never>;
+  /** A track could not be remuxed into its final file; no message, path or id. */
+  remux_failed: Record<string, never>;
   /** `kind` is a job kind of this program (conform, transcribe, render ...), never a message or a path. */
   job_failed: { kind: string };
   /** `error` is the class name of an unexpected request error, never its message. */

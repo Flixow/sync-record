@@ -50,7 +50,10 @@ export function createApp(config: Config, storage: Storage, asr?: AsrEngine): Ap
   const post = new PostProduction(config, storage, asr);
   const telemetry = createTelemetry(config.telemetry);
   post.jobs.onFailed = (job) => telemetry.capture("job_failed", { kind: job.kind });
-  telemetry.capture("server_started", { version: config.version });
+  post.jobs.onDone = (job) => {
+    if (job.kind === "conform") telemetry.capture("project_ready", {});
+  };
+  collector.onRemuxFailed = () => telemetry.capture("remux_failed", {});
   const server = createServer((req, res) => {
     void handle(req, res).catch((error: unknown) => fail(res, error));
   });
@@ -152,7 +155,9 @@ export function createApp(config: Config, storage: Storage, asr?: AsrEngine): Ap
     if (method === "POST" && rest.length === 1 && rest[0] === "join") {
       claims(req, url, "invite", sid);
       const body = await readJson(req);
-      json(res, 201, await collector.join(sid, v.str(body.name, "name", 60), userAgent(req)));
+      const joined = await collector.join(sid, v.str(body.name, "name", 60), userAgent(req));
+      telemetry.capture("session_joined", { participants: (await collector.view(sid, joined.participantId)).roster.length });
+      json(res, 201, joined);
       return;
     }
 
@@ -180,7 +185,12 @@ export function createApp(config: Config, storage: Storage, asr?: AsrEngine): Ap
         kinds: body.kinds.map((item) => v.kind(item, "kinds")),
         ...(body.consentVersion === undefined ? {} : { consentVersion: v.str(body.consentVersion, "consentVersion", 40) }),
       };
-      await collector.setStatus(sid, who.pid, request);
+      const before = await collector.setStatus(sid, who.pid, request);
+      if (request.state === "recording" && before !== "recording") {
+        telemetry.capture("recording_started", { audio: request.kinds.includes("audio"), camera: request.kinds.includes("camera"), screen: request.kinds.includes("screen") });
+      } else if (request.state !== "recording" && before === "recording") {
+        telemetry.capture("recording_stopped", {});
+      }
       res.writeHead(204).end();
       return;
     }
@@ -192,8 +202,9 @@ export function createApp(config: Config, storage: Storage, asr?: AsrEngine): Ap
     if (method === "POST" && rest.length === 1 && rest[0] === "end") {
       host(req, url, sid);
       const body = await readJson(req);
+      const alreadyEnded = (await collector.view(sid, who.pid)).ended;
       const manifest = await collector.endSession(sid, body.force === true);
-      telemetry.capture("session_ended", { participants: manifest.participants.length });
+      if (!alreadyEnded) telemetry.capture("session_ended", { participants: manifest.participants.length });
       json(res, 200, manifest);
       return;
     }
