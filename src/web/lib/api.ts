@@ -1,4 +1,6 @@
 import type {
+  ClaimLinkResponse,
+  ClaimResponse,
   ClockResponse,
   CreateSessionRequest,
   CreateSessionResponse,
@@ -65,6 +67,7 @@ export const publicApi = {
   createSession: (request: CreateSessionRequest) => call<CreateSessionResponse>("POST", "/api/sessions", { json: request }),
   join: (sid: string, inviteToken: string, name: string) =>
     call<JoinResponse>("POST", `/api/sessions/${sid}/join`, { token: inviteToken, json: { name } }),
+  claim: (sid: string, claimToken: string) => call<ClaimResponse>("POST", `/api/sessions/${sid}/claim`, { token: claimToken, json: {} }),
 };
 
 /** API of one joined participant. */
@@ -79,6 +82,7 @@ export class SessionApi {
   }
 
   view = () => call<SessionView>("GET", this.path(), { token: this.token });
+  claimLink = () => call<ClaimLinkResponse>("POST", this.path("/claim-links"), { token: this.token, json: {} });
   clock = () => call<ClockResponse>("POST", this.path("/clock"), { token: this.token, timeoutMs: 4000 });
   status = (request: StatusRequest) => call<void>("POST", this.path("/status"), { token: this.token, json: request });
   marker = () => call<MarkerEvent>("POST", this.path("/markers"), { token: this.token, json: {} });

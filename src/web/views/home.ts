@@ -77,7 +77,7 @@ export async function homeView(navigate: (path: string) => void): Promise<HTMLEl
       "div",
       { class: "grid-2" },
       card(t("home.form.title"), missing.length > 0 ? banner("error", t("home.unsupported")) : form, h("p", { class: "hint" }, t("home.requirements", { max: config?.maxParticipants ?? MAX_PARTICIPANTS }))),
-      how,
+      h("section", { class: "how-card" }, how),
     ),
     leftovers.length > 0
       ? card(

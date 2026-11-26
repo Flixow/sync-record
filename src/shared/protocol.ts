@@ -20,11 +20,16 @@ export interface ClockSample {
   rttMs: number;
 }
 
+export const MARKER_KINDS = ["start-beep", "host-beep", "highlight"] as const;
+export type MarkerKind = (typeof MARKER_KINDS)[number];
+
 export interface MarkerRecord {
   id: string;
-  kind: "start-beep" | "host-beep";
-  /** Client clock instant at which the beep was scheduled to start playing, in ms. */
+  /** Beeps are sync marks; a highlight is a moment a participant flagged while recording (key M or the button). */
+  kind: MarkerKind;
+  /** Client clock instant at which the beep was scheduled to start playing, or at which the highlight was flagged, in ms. */
   atClientMs: number;
+  /** Output latency of a beep; null for a highlight. */
   outputLatencyMs: number | null;
 }
 
@@ -44,6 +49,8 @@ export interface SessionView {
   roster: RosterEntry[];
   /** A fresh token with a new expiry for the caller (sliding expiry: every visit renews it). */
   renewedToken: string;
+  /** Host only: a fresh invite token with a new expiry, so the invite link shown to the host never goes stale while the host keeps the page open. */
+  renewedInviteToken?: string;
 }
 
 export interface CreateSessionRequest {
@@ -63,6 +70,17 @@ export interface JoinResponse {
   sessionId: string;
   participantId: string;
   participantToken: string;
+}
+
+export const CLAIM_MINUTES = 5;
+
+export interface ClaimLinkResponse {
+  claimToken: string;
+  expiresAtMs: number;
+}
+
+export interface ClaimResponse extends JoinResponse {
+  name: string;
 }
 
 export interface ClockResponse {

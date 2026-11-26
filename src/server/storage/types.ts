@@ -15,6 +15,8 @@ export interface Storage {
   putFile(key: string, filePath: string): Promise<void>;
   get(key: string): Promise<Buffer | null>;
   readStream(key: string): Promise<Readable>;
+  /** Absolute path of the object when it lives on the local disk; absent for remote drivers. */
+  localPath?(key: string): string;
   /** Lists every object whose key starts with the prefix, sorted by key. */
   list(prefix: string): Promise<StoredObject[]>;
 }

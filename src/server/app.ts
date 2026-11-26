@@ -6,7 +6,11 @@ import { MAX_PARTICIPANTS, type DeclareTrackRequest, type FinalizeRequest, type 
 import { Collector } from "./collector.js";
 import type { Config } from "./config.js";
 import { HttpError } from "./errors.js";
+import { postRoutes } from "./post/api.js";
+import type { AsrEngine } from "./post/asr.js";
+import { PostProduction } from "./post/index.js";
 import type { Storage } from "./storage/index.js";
+import { createTelemetry } from "./telemetry.js";
 import { verifyToken, type TokenClaims } from "./tokens.js";
 import * as v from "./validate.js";
 
@@ -19,6 +23,8 @@ const MIME: Record<string, string> = {
   ".png": "image/png",
   ".ico": "image/x-icon",
   ".woff2": "font/woff2",
+  ".webp": "image/webp",
+  ".txt": "text/plain; charset=utf-8",
 };
 
 const CSP = [
@@ -36,10 +42,18 @@ const CSP = [
 export interface App {
   server: Server;
   collector: Collector;
+  post: PostProduction;
 }
 
-export function createApp(config: Config, storage: Storage): App {
+export function createApp(config: Config, storage: Storage, asr?: AsrEngine): App {
   const collector = new Collector(config, storage);
+  const post = new PostProduction(config, storage, asr);
+  const telemetry = createTelemetry(config.telemetry);
+  post.jobs.onFailed = (job) => telemetry.capture("job_failed", { kind: job.kind });
+  post.jobs.onDone = (job) => {
+    if (job.kind === "conform") telemetry.capture("project_ready", {});
+  };
+  collector.onRemuxFailed = () => telemetry.capture("remux_failed", {});
   const server = createServer((req, res) => {
     void handle(req, res).catch((error: unknown) => fail(res, error));
   });
@@ -60,6 +74,7 @@ export function createApp(config: Config, storage: Storage): App {
       return;
     }
     console.error("unhandled request error", error);
+    telemetry.capture("server_error", { error: error instanceof Error ? error.constructor.name : "unknown" });
     json(res, 500, { error: "internal_error" });
   }
 
@@ -128,7 +143,9 @@ export function createApp(config: Config, storage: Storage): App {
       const body = await readJson(req);
       const name = v.str(body.name, "name", 60);
       const createKey = body.createKey === undefined ? undefined : v.str(body.createKey, "createKey", 200);
-      json(res, 201, await collector.createSession(name, createKey, userAgent(req)));
+      const created = await collector.createSession(name, createKey, userAgent(req));
+      telemetry.capture("session_created", {});
+      json(res, 201, created);
       return;
     }
     if (parts[0] !== "sessions" || parts.length < 2) throw new HttpError(404, "not_found");
@@ -138,12 +155,25 @@ export function createApp(config: Config, storage: Storage): App {
     if (method === "POST" && rest.length === 1 && rest[0] === "join") {
       claims(req, url, "invite", sid);
       const body = await readJson(req);
-      json(res, 201, await collector.join(sid, v.str(body.name, "name", 60), userAgent(req)));
+      const joined = await collector.join(sid, v.str(body.name, "name", 60), userAgent(req));
+      telemetry.capture("session_joined", { participants: (await collector.view(sid, joined.participantId)).roster.length });
+      json(res, 201, joined);
+      return;
+    }
+
+    if (method === "POST" && rest.length === 1 && rest[0] === "claim") {
+      const claim = claims(req, url, "claim", sid);
+      json(res, 200, await collector.redeemClaim(sid, claim));
       return;
     }
 
     const who = participant(req, url, sid);
 
+    if (method === "POST" && rest.length === 1 && rest[0] === "claim-links") {
+      host(req, url, sid);
+      json(res, 201, await collector.claimToken(sid, who.pid));
+      return;
+    }
     if (method === "GET" && rest.length === 0) {
       json(res, 200, await collector.view(sid, who.pid));
       return;
@@ -166,7 +196,12 @@ export function createApp(config: Config, storage: Storage): App {
         kinds: body.kinds.map((item) => v.kind(item, "kinds")),
         ...(body.consentVersion === undefined ? {} : { consentVersion: v.str(body.consentVersion, "consentVersion", 40) }),
       };
-      await collector.setStatus(sid, who.pid, request);
+      const before = await collector.setStatus(sid, who.pid, request);
+      if (request.state === "recording" && before !== "recording") {
+        telemetry.capture("recording_started", { audio: request.kinds.includes("audio"), camera: request.kinds.includes("camera"), screen: request.kinds.includes("screen") });
+      } else if (request.state !== "recording" && before === "recording") {
+        telemetry.capture("recording_stopped", {});
+      }
       res.writeHead(204).end();
       return;
     }
@@ -178,13 +213,22 @@ export function createApp(config: Config, storage: Storage): App {
     if (method === "POST" && rest.length === 1 && rest[0] === "end") {
       host(req, url, sid);
       const body = await readJson(req);
-      json(res, 200, await collector.endSession(sid, body.force === true));
+      const alreadyEnded = (await collector.view(sid, who.pid)).ended;
+      const manifest = await collector.endSession(sid, body.force === true);
+      if (!alreadyEnded) telemetry.capture("session_ended", { participants: manifest.participants.length });
+      json(res, 200, manifest);
       return;
     }
     if (method === "GET" && rest.length === 1 && rest[0] === "manifest") {
       host(req, url, sid);
       json(res, 200, await collector.manifest(sid));
       return;
+    }
+
+    if (rest[0] === "project") {
+      host(req, url, sid);
+      if (await postRoutes(post, { json, readJson }, req, res, sid, rest.slice(1))) return;
+      throw new HttpError(404, "not_found");
     }
 
     if (rest[0] === "tracks") {
@@ -262,7 +306,9 @@ export function createApp(config: Config, storage: Storage): App {
       res.end();
       return;
     }
-    createReadStream(target).pipe(res);
+    const stream = createReadStream(target);
+    stream.on("error", () => res.destroy());
+    stream.pipe(res);
   }
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -278,5 +324,5 @@ export function createApp(config: Config, storage: Storage): App {
     await serveStatic(req, res, url);
   }
 
-  return { server, collector };
+  return { server, collector, post };
 }

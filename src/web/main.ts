@@ -1,9 +1,12 @@
 import "./styles.css";
-import { loadCredentials } from "./lib/api.js";
+import { SessionApi, loadCredentials, saveCredentials } from "./lib/api.js";
+import { ProjectApi } from "./lib/project-api.js";
 import { Room } from "./lib/room.js";
 import { initLang, onLangChange } from "./i18n/index.js";
+import { claimView, noAccessView } from "./views/access.js";
 import { homeView } from "./views/home.js";
 import { joinView } from "./views/join.js";
+import { projectView } from "./views/project-view.js";
 import { roomView } from "./views/room-view.js";
 
 const app = document.getElementById("app");
@@ -14,6 +17,7 @@ initLang();
 let room: Room | null = null;
 let roomUnsubscribe: (() => void) | null = null;
 let rendering = 0;
+let disposeProject: (() => void) | null = null;
 
 function navigate(path: string): void {
   history.pushState(null, "", path);
@@ -27,8 +31,43 @@ function disposeRoom(): void {
   room = null;
 }
 
+async function renderProject(sid: string, ticket: number): Promise<void> {
+  disposeRoom();
+  const credentials = loadCredentials(sid);
+  if (!credentials?.host) {
+    app?.replaceChildren(noAccessView());
+    return;
+  }
+  // Visiting the page renews the host token (sliding expiry), as the room page does.
+  let token = credentials.participantToken;
+  try {
+    token = (await new SessionApi(sid, token).view()).renewedToken;
+    saveCredentials(sid, { ...credentials, participantToken: token });
+  } catch {
+    // the project calls report an expired token themselves
+  }
+  if (ticket !== rendering) return;
+  const view = projectView(new ProjectApi(sid, token));
+  disposeProject = view.dispose;
+  app?.replaceChildren(view.el);
+}
+
 async function render(): Promise<void> {
   const ticket = (rendering += 1);
+  disposeProject?.();
+  disposeProject = null;
+  const projectMatch = /^\/project\/([a-z0-9-]+)\/?$/.exec(location.pathname);
+  if (projectMatch?.[1]) {
+    await renderProject(projectMatch[1], ticket);
+    return;
+  }
+  const claimMatch = /^\/claim\/([a-z0-9-]+)\/?$/.exec(location.pathname);
+  if (claimMatch?.[1]) {
+    disposeRoom();
+    const fragment = location.hash.startsWith("#") ? location.hash.slice(1) : "";
+    app?.replaceChildren(claimView(claimMatch[1], fragment || null, navigate));
+    return;
+  }
   const match = /^\/join\/([a-z0-9-]+)\/?$/.exec(location.pathname);
   if (!match || !match[1]) {
     disposeRoom();

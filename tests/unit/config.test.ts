@@ -31,6 +31,14 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...base, STORAGE_DRIVER: "ftp" })).toThrow(/STORAGE_DRIVER/);
   });
 
+  it("reads the speech engine settings and rejects an unknown compute type", () => {
+    expect(loadConfig(base).post.asr).toEqual({ python: "python3", model: null, computeType: "int8" });
+    const config = loadConfig({ ...base, ASR_MODEL: "small", ASR_COMPUTE_TYPE: "float32", ASR_PYTHON: "/opt/asr/bin/python", MODELS_DIR: "/models" });
+    expect(config.post.asr).toEqual({ python: "/opt/asr/bin/python", model: "small", computeType: "float32" });
+    expect(config.post.modelsDir).toBe("/models");
+    expect(() => loadConfig({ ...base, ASR_COMPUTE_TYPE: "int4" })).toThrow(/ASR_COMPUTE_TYPE/);
+  });
+
   it("rejects out-of-range numbers", () => {
     expect(() => loadConfig({ ...base, PORT: "99999" })).toThrow(/PORT/);
     expect(() => loadConfig({ ...base, TOKEN_TTL_HOURS: "0" })).toThrow(/TOKEN_TTL_HOURS/);

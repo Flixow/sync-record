@@ -1,7 +1,10 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import {
+  CLAIM_MINUTES,
   MAX_PARTICIPANTS,
+  type ClaimLinkResponse,
+  type ClaimResponse,
   type ClockResponse,
   type DeclareTrackRequest,
   type FinalizeRequest,
@@ -21,9 +24,10 @@ import { buildManifest } from "./manifest.js";
 import type { ParticipantRecord, SessionRecord, TrackRecord } from "./model.js";
 import { remuxTrack } from "./remux.js";
 import type { Storage } from "./storage/index.js";
-import { issueToken } from "./tokens.js";
+import { issueToken, type TokenClaims } from "./tokens.js";
 
 const MARKER_LEAD_MS = 3000;
+export const CLAIM_TTL_MS = CLAIM_MINUTES * 60_000;
 const PART_NAME = /^\d{12}$/;
 
 interface Presence {
@@ -75,6 +79,8 @@ export class Collector {
   private remuxChain: Promise<void> = Promise.resolve();
   private readonly remuxing = new Set<string>();
   private readonly heartbeat: NodeJS.Timeout;
+  /** Called when a track could not be remuxed (the telemetry hook; carries nothing). */
+  onRemuxFailed: (() => void) | null = null;
 
   constructor(
     private readonly config: Config,
@@ -134,6 +140,7 @@ export class Collector {
     const caller = this.participant(runtime, pid);
     return {
       renewedToken: this.participantToken(sid, caller),
+      ...(caller.host ? { renewedInviteToken: this.inviteToken(sid) } : {}),
       sessionId: sid,
       ended: runtime.record.endedAtMs !== null,
       maxParticipants: MAX_PARTICIPANTS,
@@ -141,20 +148,44 @@ export class Collector {
     };
   }
 
+  async claimToken(sid: string, pid: string): Promise<ClaimLinkResponse> {
+    const runtime = await this.load(sid);
+    if (!this.participant(runtime, pid).host) throw new HttpError(403, "host_only");
+    const expiresAtMs = Date.now() + CLAIM_TTL_MS;
+    const claimToken = issueToken(this.config.tokenSecret, { sid, role: "claim", pid, jti: randomUUID(), exp: expiresAtMs });
+    return { claimToken, expiresAtMs };
+  }
+
+  async redeemClaim(sid: string, claim: TokenClaims): Promise<ClaimResponse> {
+    const runtime = await this.load(sid);
+    const host = claim.pid ? runtime.record.participants.find((participant) => participant.id === claim.pid) : undefined;
+    if (!host?.host || !claim.jti) throw new HttpError(403, "forbidden");
+    const now = Date.now();
+    const used = (runtime.record.usedClaims ?? []).filter((entry) => entry.exp >= now);
+    if (used.some((entry) => entry.jti === claim.jti)) throw new HttpError(403, "claim_used");
+    used.push({ jti: claim.jti, exp: claim.exp });
+    runtime.record.usedClaims = used;
+    await this.persist(runtime);
+    return { sessionId: sid, participantId: host.id, participantToken: this.participantToken(sid, host), name: host.name };
+  }
+
   clock(): ClockResponse {
     const serverRecvMs = nowMs();
     return { serverRecvMs, serverSendMs: nowMs() };
   }
 
-  async setStatus(sid: string, pid: string, request: StatusRequest): Promise<void> {
+  /** Returns the state the participant reported before this call (undefined for the first report). */
+  async setStatus(sid: string, pid: string, request: StatusRequest): Promise<PresenceState | undefined> {
     const runtime = await this.load(sid);
     const participant = this.participant(runtime, pid);
+    const before = runtime.presence.get(pid)?.state;
     runtime.presence.set(pid, { state: request.state, kinds: request.kinds });
     if (request.consentVersion !== undefined && participant.consent === null) {
       participant.consent = { version: request.consentVersion, atMs: nowMs() };
       await this.persist(runtime);
     }
     this.broadcastRoster(runtime);
+    return before;
   }
 
   async createMarker(sid: string): Promise<MarkerEvent> {
@@ -467,6 +498,7 @@ export class Collector {
       });
       track.output = { status: "ok", file, bytes: result.bytes, durationSec: result.durationSec };
     } catch (error) {
+      this.onRemuxFailed?.();
       track.output = { status: "failed", file, bytes: 0, durationSec: null, error: error instanceof Error ? error.message.slice(0, 300) : "remux failed" };
     } finally {
       this.remuxing.delete(track.id);
