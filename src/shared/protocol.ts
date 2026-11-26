@@ -72,6 +72,17 @@ export interface JoinResponse {
   participantToken: string;
 }
 
+export const CLAIM_MINUTES = 5;
+
+export interface ClaimLinkResponse {
+  claimToken: string;
+  expiresAtMs: number;
+}
+
+export interface ClaimResponse extends JoinResponse {
+  name: string;
+}
+
 export interface ClockResponse {
   serverRecvMs: number;
   serverSendMs: number;

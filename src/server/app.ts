@@ -161,8 +161,19 @@ export function createApp(config: Config, storage: Storage, asr?: AsrEngine): Ap
       return;
     }
 
+    if (method === "POST" && rest.length === 1 && rest[0] === "claim") {
+      const claim = claims(req, url, "claim", sid);
+      json(res, 200, await collector.redeemClaim(sid, claim));
+      return;
+    }
+
     const who = participant(req, url, sid);
 
+    if (method === "POST" && rest.length === 1 && rest[0] === "claim-links") {
+      host(req, url, sid);
+      json(res, 201, await collector.claimToken(sid, who.pid));
+      return;
+    }
     if (method === "GET" && rest.length === 0) {
       json(res, 200, await collector.view(sid, who.pid));
       return;
@@ -295,7 +306,9 @@ export function createApp(config: Config, storage: Storage, asr?: AsrEngine): Ap
       res.end();
       return;
     }
-    createReadStream(target).pipe(res);
+    const stream = createReadStream(target);
+    stream.on("error", () => res.destroy());
+    stream.pipe(res);
   }
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {

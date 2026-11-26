@@ -30,6 +30,7 @@ export class ToolError extends Error {
     message: string,
     readonly code: number | null,
     readonly stderr: string,
+    readonly signal: NodeJS.Signals | null = null,
   ) {
     super(message);
   }
@@ -42,6 +43,14 @@ export class CanceledError extends Error {
 }
 
 const TAIL = 4000;
+
+function describeExit(cmd: string, code: number | null, signal: NodeJS.Signals | null, stderr: string): string {
+  const tail = stderr.trim().split("\n").slice(-3).join(" | ");
+  const how = signal
+    ? `was stopped by ${signal}${signal === "SIGKILL" ? " (usually the system ran out of memory)" : ""}`
+    : `exited with ${code}`;
+  return tail ? `${cmd} ${how}: ${tail}` : `${cmd} ${how}`;
+}
 
 /**
  * Runs an external tool in its own process group at the job's niceness. The group id is reported through
@@ -117,13 +126,13 @@ export function runTool(ctx: ToolContext, cmd: string, args: string[], options: 
       ctx.onPid(null);
       reject(new ToolError(`cannot run ${cmd}: ${error.message}`, null, stderr));
     });
-    child.once("close", (code) => {
+    child.once("close", (code, signal) => {
       ctx.signal.removeEventListener("abort", onAbort);
       if (hardKill) clearTimeout(hardKill);
       ctx.onPid(null);
       if (canceled) reject(new CanceledError());
       else if (code === 0) resolve({ stdout, stderr });
-      else reject(new ToolError(`${cmd} exited with ${code}: ${stderr.trim().split("\n").slice(-3).join(" | ")}`, code, stderr));
+      else reject(new ToolError(describeExit(cmd, code, signal, stderr), code, stderr, signal));
     });
   });
 }

@@ -53,8 +53,7 @@ export interface PostConfig {
   truePeakDb: number;
   /** Directory where speech models are downloaded to on first use (never inside the repository). */
   modelsDir: string;
-  /** Python with faster-whisper installed, and the model it runs (downloaded into `modelsDir` on first use). */
-  asr: { python: string; model: string; computeType: string };
+  asr: { python: string; model: string | null; computeType: string };
   /** Optional language model (a local llama.cpp server, an OMP gateway, any OpenAI-compatible service). Null (the default) keeps every feature on its built-in heuristics. */
   llm: null | LlmSettings;
 }
@@ -199,7 +198,7 @@ export function loadConfig(env: Env = process.env): Config {
       modelsDir: path.resolve(text(env, "MODELS_DIR") ?? path.join(postDir, "models")),
       asr: {
         python: text(env, "ASR_PYTHON") ?? "python3",
-        model: text(env, "ASR_MODEL") ?? "deepdml/faster-whisper-large-v3-turbo-ct2",
+        model: text(env, "ASR_MODEL") ?? null,
         computeType: computeType(text(env, "ASR_COMPUTE_TYPE") ?? "int8"),
       },
       llm: loadLlm(env),

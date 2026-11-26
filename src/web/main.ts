@@ -3,6 +3,7 @@ import { SessionApi, loadCredentials, saveCredentials } from "./lib/api.js";
 import { ProjectApi } from "./lib/project-api.js";
 import { Room } from "./lib/room.js";
 import { initLang, onLangChange } from "./i18n/index.js";
+import { claimView, noAccessView } from "./views/access.js";
 import { homeView } from "./views/home.js";
 import { joinView } from "./views/join.js";
 import { projectView } from "./views/project-view.js";
@@ -34,8 +35,7 @@ async function renderProject(sid: string, ticket: number): Promise<void> {
   disposeRoom();
   const credentials = loadCredentials(sid);
   if (!credentials?.host) {
-    history.replaceState(null, "", `/join/${sid}`);
-    void render();
+    app?.replaceChildren(noAccessView());
     return;
   }
   // Visiting the page renews the host token (sliding expiry), as the room page does.
@@ -59,6 +59,13 @@ async function render(): Promise<void> {
   const projectMatch = /^\/project\/([a-z0-9-]+)\/?$/.exec(location.pathname);
   if (projectMatch?.[1]) {
     await renderProject(projectMatch[1], ticket);
+    return;
+  }
+  const claimMatch = /^\/claim\/([a-z0-9-]+)\/?$/.exec(location.pathname);
+  if (claimMatch?.[1]) {
+    disposeRoom();
+    const fragment = location.hash.startsWith("#") ? location.hash.slice(1) : "";
+    app?.replaceChildren(claimView(claimMatch[1], fragment || null, navigate));
     return;
   }
   const match = /^\/join\/([a-z0-9-]+)\/?$/.exec(location.pathname);

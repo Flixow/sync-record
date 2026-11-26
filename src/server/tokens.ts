@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-export type TokenRole = "invite" | "participant";
+export type TokenRole = "invite" | "participant" | "claim";
 
 export interface TokenClaims {
   /** Session id. */
@@ -10,6 +10,8 @@ export interface TokenClaims {
   pid?: string;
   /** True for the participant that created the session. */
   host?: boolean;
+  /** Single-use id (claim tokens only). */
+  jti?: string;
   /** Expiry, ms since the epoch. */
   exp: number;
 }
@@ -34,7 +36,7 @@ export function verifyToken(secret: string, token: string, now = Date.now()): To
   try {
     const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as TokenClaims;
     if (typeof claims.sid !== "string" || typeof claims.exp !== "number") return null;
-    if (claims.role !== "invite" && claims.role !== "participant") return null;
+    if (claims.role !== "invite" && claims.role !== "participant" && claims.role !== "claim") return null;
     if (claims.exp < now) return null;
     return claims;
   } catch {

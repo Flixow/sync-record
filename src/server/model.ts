@@ -47,4 +47,5 @@ export interface SessionRecord {
   endedAtMs: number | null;
   participants: ParticipantRecord[];
   tracks: TrackRecord[];
+  usedClaims?: { jti: string; exp: number }[];
 }
