@@ -67,6 +67,16 @@ run `docker compose up --build`. The image listens on 8080, runs as the unprivil
 the `/data` volume (a bind mount must be writable by uid 1000). The Dockerfile builds with the classic builder as well as
 BuildKit. The compose example sets no resource limits; add `mem_limit` (and `memswap_limit`) to the service if the host is shared.
 
+The image also carries the speech engine for **Transcribe**: `python3` and `faster-whisper` (CPU wheels only, in a
+virtualenv on `PATH`). The model is **not** in the image (about 1.6 GB): it downloads into `MODELS_DIR` (`/models`, a
+volume, so it survives container and image upgrades) on the first transcript job, which needs outbound access to
+huggingface.co once and takes a few minutes. Mount the `/models` volume (the compose example does) so it is downloaded
+only once. `ASR_MODEL` and `ASR_COMPUTE_TYPE` change the model and the compute type. To check an image:
+
+```sh
+npm run smoke:image -- sync-record   # transcribes a short Polish fixture inside the image; first run downloads the model
+```
+
 ## Configuration
 
 Everything is read from the environment (see `.env.example`). Nothing is hardcoded.
@@ -89,9 +99,10 @@ Everything is read from the environment (see `.env.example`). Nothing is hardcod
 | `POST_MIN_FREE_GB` | `10` | A job is refused (HTTP 507) when the data directory has less free space than this. |
 | `POST_RETENTION` | `keep-exports` | `keep-exports` deletes proxies and intermediates after an export; `keep-all` keeps them. They can always be deleted per session. |
 | `LOUDNESS_LUFS`, `TRUE_PEAK_DBTP` | `-16`, `-1` | Default loudness target and true-peak ceiling of exports. |
-| `MODELS_DIR` | `<POST_DIR>/models` | Where speech models are downloaded on first use. Models never go into git. |
-| `ASR_PYTHON` | `python3` | A Python with `faster-whisper` installed (`pip install faster-whisper`); the transcript job runs it as a child process. |
+| `MODELS_DIR` | `<POST_DIR>/models` (`/models` in the Docker image) | Where speech models are downloaded on first use. Models never go into git. |
+| `ASR_PYTHON` | `python3` | A Python with `faster-whisper` installed (`pip install faster-whisper`; the Docker image has it); the transcript job runs it as a child process. |
 | `ASR_MODEL` | `deepdml/faster-whisper-large-v3-turbo-ct2` | faster-whisper model; `small` is a faster, less accurate choice (about 2.5x as fast; 17% instead of 7% word error rate on Polish). |
+| `ASR_COMPUTE_TYPE` | `int8` | CTranslate2 compute type of the model on the CPU: `int8`, `int8_float32`, `int16`, `float32`, `auto`, ... (an unsupported one fails the transcript job). |
 | `LLM_URL`, `LLM_MODEL` | empty | Optional local OpenAI-compatible server (for example llama.cpp) used to re-rank clips and draft titles. Off by default; every feature works without it. |
 | `WEB_DIR` | `./dist/web` | Built web client. |
 
@@ -139,7 +150,7 @@ project page.
 track, and a track counts as speaking only when it is not just another speaker's voice leaking into its microphone), so
 silent stretches and bleed never reach the engine and a silent track produces no text. The engine is
 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) with `large-v3-turbo` in int8 on the CPU; it needs a Python
-with `faster-whisper` installed (`ASR_PYTHON`) and downloads the model into `MODELS_DIR` on first use, never into the
+with `faster-whisper` installed (`ASR_PYTHON`; the Docker image has it) and downloads the model into `MODELS_DIR` on first use, never into the
 repository. Words carry their own start and end on the project timeline; words heard on two tracks at once are reduced to
 the louder one. The language is detected per project or set by hand. The transcript is searchable, click-to-seek, and
 exports as SRT, VTT or plain text (with or without speaker names). Pressing **M** (or the button) while recording drops

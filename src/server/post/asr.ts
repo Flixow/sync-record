@@ -58,7 +58,7 @@ import json, sys, wave
 import numpy as np
 req = json.loads(sys.argv[1])
 from faster_whisper import WhisperModel
-model = WhisperModel(req["model"], device="cpu", compute_type="int8", cpu_threads=req["threads"], download_root=req["root"])
+model = WhisperModel(req["model"], device="cpu", compute_type=req["compute"], cpu_threads=req["threads"], download_root=req["root"])
 out = {"files": []}
 for path in req.get("files", []):
     with wave.open(path, "rb") as wav:
@@ -87,7 +87,7 @@ export class FasterWhisperEngine implements AsrEngine {
     const root = this.config.post.modelsDir;
     await mkdir(root, { recursive: true });
     const out = path.join(root, `.result-${ctx.jobId}-${Date.now()}.json`);
-    const request = JSON.stringify({ model: this.model, root, threads, lang, files, out });
+    const request = JSON.stringify({ model: this.model, compute: this.config.post.asr.computeType, root, threads, lang, files, out });
     try {
       await runTool(ctx, this.config.post.asr.python, ["-c", HELPER, request], { env: { HF_HUB_DISABLE_TELEMETRY: "1", HF_HOME: path.join(root, "hf"), TOKENIZERS_PARALLELISM: "false" } });
       return JSON.parse(await readFile(out, "utf8")) as HelperResult;
