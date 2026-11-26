@@ -103,7 +103,12 @@ Everything is read from the environment (see `.env.example`). Nothing is hardcod
 | `ASR_PYTHON` | `python3` | A Python with `faster-whisper` installed (`pip install faster-whisper`; the Docker image has it); the transcript job runs it as a child process. |
 | `ASR_MODEL` | `deepdml/faster-whisper-large-v3-turbo-ct2` | faster-whisper model; `small` is a faster, less accurate choice (about 2.5x as fast; 17% instead of 7% word error rate on Polish). |
 | `ASR_COMPUTE_TYPE` | `int8` | CTranslate2 compute type of the model on the CPU: `int8`, `int8_float32`, `int16`, `float32`, `auto`, ... (an unsupported one fails the transcript job). |
-| `LLM_URL`, `LLM_MODEL` | empty | Optional local OpenAI-compatible server (for example llama.cpp) used to re-rank clips and draft titles. Off by default; every feature works without it. |
+| `LLM_URL` | empty | Optional chat-completions endpoint (base URL of an OpenAI-compatible server) for the language-model features: clip re-ranking, chapter titles, title and description drafts, scene-plan suggestions. Empty = off, and every feature works without it. See [Optional language model](#optional-language-model). |
+| `LLM_PROVIDER` | `openai-compatible` | `openai-compatible` (llama.cpp, Ollama, LiteLLM, OpenRouter, OpenAI, any server with `/v1/chat/completions`; key optional) or `omp-gateway` (an OMP auth gateway; key and model required). |
+| `LLM_MODEL` | `default` | Model name sent to the endpoint. Required for `omp-gateway` (`provider/model-id`). |
+| `LLM_API_KEY`, `LLM_API_KEY_FILE` | empty | Bearer key for the endpoint, from the environment or from a file (use the file with Docker/Kubernetes secrets); set at most one. Refused over plain `http://` unless the host is this machine, Docker's `host.docker.internal` or a Tailscale address. |
+| `POSTHOG_KEY`, `POSTHOG_HOST` | empty | Optional telemetry to a PostHog instance you operate. Off unless both are set; see [Telemetry](#telemetry). |
+| `LLM_TIMEOUT_MS` | `60000` | Per-request timeout, 1000 to 600000. A timeout counts as a failure: the built-in rules answer instead. |
 | `WEB_DIR` | `./dist/web` | Built web client. |
 
 ## Output
@@ -238,8 +243,7 @@ own range and preset (vertical 1080x1920 by default); its start and end can be a
 with the same renderer, captions included. **Publish** drafts chapters (checked against YouTube's rules: the first at
 00:00, at least three, ascending, at least ten seconds apart), three title variants and a description from the transcript,
 and picks thumbnail frames (3840x2160, or 2160x3840 for a Short, under 50 MB) with an optional text plate. All of it works
-without a language model. Setting `LLM_URL` to a local llama.cpp server enables an optional, per-request re-ranking of
-clips and rewriting of the draft; it is off by default and nothing leaves the machine.
+without a language model; the optional one is described under [Optional language model](#optional-language-model).
 
 On the project page the **Clips** panel lists the suggestions with their reasons and a text excerpt; play a range, move its
 start or end one word at a time, save it, then render the saved clip (vertical 1080x1920 with captions by default) and
@@ -247,8 +251,66 @@ find the file in the exports list. The **Export** panel gains burned-in captions
 .vtt files are also written next to a video) and audio cleanup (level the speakers, reduce bleed between microphones, reduce
 background noise); every option is off by default, and the noise model is downloaded only when you ask for it. The
 **Publish** panel shows the chapters with YouTube's rules checked and a copy button, the title and description draft, and a
-thumbnail picker (moment, video or Short shape, optional text) that ends with a picture you can download. The "local model"
-boxes of Clips and Publish are off by default and only act when `LLM_URL` is set.
+thumbnail picker (moment, video or Short shape, optional text) that ends with a picture you can download. The "language model"
+boxes of Clips and Publish, and the scene-plan box of the layout editor, are off by default and only act when `LLM_URL` is set.
+
+### Optional language model
+
+Off unless `LLM_URL` is set, and then used only for the request that ticks the box. Four things use it, each with a
+built-in fallback: re-ranking and titling clips, retitling the chapters (start times and count never change), the title
+and description draft, and a **scene-plan suggestion** (layout per stretch of the recording). Any failure (refused,
+timeout, overload, an answer that does not validate) returns the built-in result and a short reason; nothing is retried.
+
+What the model receives: transcript text and, for the scene plan, a few numbers per stretch (speech, overlap and silence
+share, loudness, speaker changes, screen share yes/no). Never audio, video or frames. When `LLM_URL` is not on this
+machine, the boxes say that the transcript leaves it; point it only at a service you may send it to.
+
+The model chooses from a fixed list per stretch (never timestamps) and its layouts are written as ordinary scene overrides
+in one undoable step, so the plan stays hand-editable. Highlights and cut suggestions are only listed, never applied.
+Transition types are not part of the editor (the renderer makes hard cuts), so none are suggested. Without a model the
+same button gives no layout changes and lists long silences as cut candidates and the clip suggestions as highlights.
+
+Providers share one small interface (`LlmClient` in `src/server/post/llm.ts`: `enabled` and `rank(prompt)` returning
+parsed JSON or `null`). To add one, implement it and register it in `PROVIDERS`; for a service that speaks the OpenAI
+chat-completions protocol you only need `LLM_URL`, `LLM_MODEL` and your own `LLM_API_KEY`:
+
+```sh
+LLM_URL=https://api.openai.com
+LLM_MODEL=<model id of your choice>
+LLM_API_KEY_FILE=/run/secrets/llm_key
+```
+
+`omp-gateway` talks to an OMP `auth-gateway` (`omp auth-gateway serve`) that holds provider credentials for
+you (`LLM_MODEL=provider/model-id`, a per-client token from the gateway's `--clients` file as the key). Give the
+application a gateway client token, never the token of the auth broker behind it: a broker token exposes every
+credential the broker holds. Using a chat subscription this way is the operator's own responsibility: Anthropic's
+terms do not allow routing subscription credentials through third-party applications, and OpenAI limits subscription use
+to its participating apps. It is meant for a private, single-operator installation; anyone else should use their own API
+keys with `openai-compatible`.
+
+## Telemetry
+
+Off by default. Nothing is sent, no connection is opened and the build contains no key or host unless the operator sets both
+`POSTHOG_KEY` and `POSTHOG_HOST` (an `https://` origin; `http://` only for localhost) in the server's environment. The
+repository, the web bundle and the Docker image carry neither; the browser never talks to PostHog (there is no PostHog SDK
+in the web app, so there is no autocapture, no session recording and no page-view tracking).
+
+When enabled, the server sends exactly these events, each as one request to `POSTHOG_HOST/capture/`, fire-and-forget with a
+3 s timeout:
+
+| Event | Properties |
+| --- | --- |
+| `server_started` | `version` of the program |
+| `session_created` | none |
+| `session_ended` | `participants` (a number) |
+| `job_failed` | `kind` of the post-production job (for example `transcribe`) |
+| `server_error` | `error`: class name of an unexpected request error, not its message |
+
+Every event also carries a random id generated at each server start (it identifies no person and no recording),
+`$process_person_profile: false` and `$geoip_disable: true`. Never sent: audio, video, frames, transcripts, names, emails,
+session or participant ids, file names, paths, error messages, IP addresses of participants (the server's own address is
+what PostHog sees, so also switch on "Discard client IP data" in the PostHog project). The set of events is a closed list in
+`src/server/telemetry.ts`; adding one is a code change.
 
 ## How it works
 

@@ -10,6 +10,7 @@ import { postRoutes } from "./post/api.js";
 import type { AsrEngine } from "./post/asr.js";
 import { PostProduction } from "./post/index.js";
 import type { Storage } from "./storage/index.js";
+import { createTelemetry } from "./telemetry.js";
 import { verifyToken, type TokenClaims } from "./tokens.js";
 import * as v from "./validate.js";
 
@@ -47,6 +48,9 @@ export interface App {
 export function createApp(config: Config, storage: Storage, asr?: AsrEngine): App {
   const collector = new Collector(config, storage);
   const post = new PostProduction(config, storage, asr);
+  const telemetry = createTelemetry(config.telemetry);
+  post.jobs.onFailed = (job) => telemetry.capture("job_failed", { kind: job.kind });
+  telemetry.capture("server_started", { version: config.version });
   const server = createServer((req, res) => {
     void handle(req, res).catch((error: unknown) => fail(res, error));
   });
@@ -67,6 +71,7 @@ export function createApp(config: Config, storage: Storage, asr?: AsrEngine): Ap
       return;
     }
     console.error("unhandled request error", error);
+    telemetry.capture("server_error", { error: error instanceof Error ? error.constructor.name : "unknown" });
     json(res, 500, { error: "internal_error" });
   }
 
@@ -135,7 +140,9 @@ export function createApp(config: Config, storage: Storage, asr?: AsrEngine): Ap
       const body = await readJson(req);
       const name = v.str(body.name, "name", 60);
       const createKey = body.createKey === undefined ? undefined : v.str(body.createKey, "createKey", 200);
-      json(res, 201, await collector.createSession(name, createKey, userAgent(req)));
+      const created = await collector.createSession(name, createKey, userAgent(req));
+      telemetry.capture("session_created", {});
+      json(res, 201, created);
       return;
     }
     if (parts[0] !== "sessions" || parts.length < 2) throw new HttpError(404, "not_found");
@@ -185,7 +192,9 @@ export function createApp(config: Config, storage: Storage, asr?: AsrEngine): Ap
     if (method === "POST" && rest.length === 1 && rest[0] === "end") {
       host(req, url, sid);
       const body = await readJson(req);
-      json(res, 200, await collector.endSession(sid, body.force === true));
+      const manifest = await collector.endSession(sid, body.force === true);
+      telemetry.capture("session_ended", { participants: manifest.participants.length });
+      json(res, 200, manifest);
       return;
     }
     if (method === "GET" && rest.length === 1 && rest[0] === "manifest") {

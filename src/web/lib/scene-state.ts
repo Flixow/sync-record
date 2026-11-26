@@ -143,6 +143,13 @@ export class SceneState {
     this.move(next, applyOverrides(this.shown, [override]));
   }
 
+  /** Puts several manual changes over the scenes in one history step (a suggested plan); one undo takes them all back. */
+  addOverrides(overrides: SceneOverride[]): void {
+    if (overrides.length === 0) return;
+    const next = commitPlan(this.history, overrides.reduce((plan, override) => addOverride(plan, override), this.history.present));
+    this.move(next, applyOverrides(this.shown, overrides));
+  }
+
   removeOverrideAt(index: number): void {
     this.move(commitPlan(this.history, removeOverrideAt(this.history.present, index)));
   }

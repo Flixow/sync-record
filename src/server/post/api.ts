@@ -8,6 +8,8 @@ import { freeBytes } from "./jobs.js";
 import { TRANSCRIPT_FILE } from "./transcribe.js";
 import { layoutSources, resolveScenes } from "./layout-plan.js";
 import { parseScenes, readScenes, saveScenes } from "./scenes-store.js";
+import { suggestScenePlan } from "./scene-suggest.js";
+import { llmTransport } from "./llm.js";
 import { captionStyleById } from "../../shared/captions.js";
 import { ensureRnnoiseModel } from "./audio-clean.js";
 import { handlePublishRoutes } from "./api-publish.js";
@@ -94,7 +96,7 @@ export async function postRoutes(post: PostProduction, http: Http, req: Incoming
       project,
       jobs: post.jobs.list(sid).slice(0, 30),
       disk: { freeBytes: free, minFreeBytes: post.config.post.minFreeBytes },
-      settings: { loudnessLufs: post.config.post.loudnessLufs, truePeakDb: post.config.post.truePeakDb, retention: post.config.post.retention, llm: post.config.post.llm !== null },
+      settings: { loudnessLufs: post.config.post.loudnessLufs, truePeakDb: post.config.post.truePeakDb, retention: post.config.post.retention, llm: post.config.post.llm !== null, llmRemote: post.config.post.llm !== null && llmTransport(post.config.post.llm.url ?? "")?.local !== true },
     });
     return true;
   }
@@ -193,6 +195,11 @@ export async function postRoutes(post: PostProduction, http: Http, req: Incoming
     }
   }
   if (await handlePublishRoutes(post, sid, rest, method, req, res, http)) return true;
+  if (rest[0] === "scenes" && rest[1] === "suggest" && rest.length === 2 && method === "POST") {
+    const body = await http.readJson(req);
+    http.json(res, 200, await suggestScenePlan(post, sid, body.llm === true));
+    return true;
+  }
   if (rest[0] === "scenes" && rest.length === 1) {
     const project = await post.store.require(sid);
     const dir = post.store.dir(sid);

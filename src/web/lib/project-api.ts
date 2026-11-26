@@ -4,7 +4,8 @@ import type { Edl, Range } from "../../shared/edl.js";
 import type { Aspect, Background, LayoutSource } from "../../shared/layout.js";
 import type { JobRecord, ProjectFile } from "../../shared/project.js";
 import type { PublishDraft, ThumbnailKind, ThumbnailSpec } from "../../shared/publish.js";
-import type { Scene, ScenePlan } from "../../shared/scenes.js";
+import type { Span } from "../../shared/scene-plan.js";
+import type { Scene, SceneOverride, ScenePlan } from "../../shared/scenes.js";
 import type { Silence } from "../../shared/silence.js";
 import type { TranscriptFile } from "../../shared/transcript.js";
 import { ApiError } from "./api.js";
@@ -13,7 +14,7 @@ export interface ProjectState {
   project: ProjectFile;
   jobs: JobRecord[];
   disk: { freeBytes: number | null; minFreeBytes: number };
-  settings: { loudnessLufs: number; truePeakDb: number; retention: string; llm: boolean };
+  settings: { loudnessLufs: number; truePeakDb: number; retention: string; llm: boolean; llmRemote: boolean };
 }
 
 /** The saved edit decision list of a project; `rev` counts its saves. */
@@ -87,9 +88,9 @@ export interface ClipsFile {
 
 export interface ClipSuggestions {
   suggestions: ClipSuggestion[];
-  /** The local language model re-ranked the list. */
+  /** The language model re-ranked the list. */
   llmUsed: boolean;
-  /** The host configured a local language model. */
+  /** The host configured a language model. */
   llmAvailable: boolean;
 }
 
@@ -112,6 +113,18 @@ export interface PublishDraftReport {
   llmAvailable: boolean;
   chapters: Chapter[];
   validation: ChapterValidation;
+}
+
+/** A suggested scene plan: overrides for the editor's own plan, and lists of stretches that are advisory only. */
+export interface ScenePlanSuggestion {
+  source: "llm" | "rules";
+  llmAvailable: boolean;
+  llmFailure: string | null;
+  segments: number;
+  overrides: SceneOverride[];
+  /** Free text when `source` is "llm", otherwise a code (a clip reason key or "silence"). */
+  highlights: Span[];
+  cuts: Span[];
 }
 
 /** Suggested moments (project time, ms) for a thumbnail, and the picture it has to be. */
@@ -163,6 +176,7 @@ export class ProjectApi implements EdlBackend, ScenesBackend {
   saveScenes = (baseRev: number, body: ScenesBody, keepalive = false) => call<ScenesFile>(this.token, "PUT", this.path("/scenes"), { baseRev, ...body }, keepalive);
   exports = async () => (await call<{ exports: ExportRecord[] }>(this.token, "GET", this.path("/exports"))).exports;
   deleteExport = async (id: string) => (await call<{ exports: ExportRecord[] }>(this.token, "DELETE", this.path(`/exports/${encodeURIComponent(id)}`))).exports;
+  suggestScenePlan = (llm: boolean) => call<ScenePlanSuggestion>(this.token, "POST", this.path("/scenes/suggest"), { llm });
   dropCache = (scope: "proxies" | "all") => call<ProjectFile>(this.token, "DELETE", this.path("/cache"), { scope });
   clips = () => call<ClipsFile>(this.token, "GET", this.path("/clips"));
   saveClips = (baseRev: number, clips: ClipProject[]) => call<ClipsFile>(this.token, "PUT", this.path("/clips"), { baseRev, clips });

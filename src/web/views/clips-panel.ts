@@ -59,6 +59,7 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
   const captionChoice = new Map<string, string>();
 
   const llmToggle = h("input", { type: "checkbox", "data-testid": "pj-cl-llm" });
+  const llmHint = h("span", { class: "hint ex-hint", "data-testid": "pj-cl-llm-hint" }, t("pj.cl.llm.hint"));
   const suggestButton = h("button", { type: "button", class: "btn btn-primary", "data-testid": "pj-cl-suggest", onclick: () => suggest() }, t("pj.cl.suggest"));
   const needTranscript = h("p", { class: "hint", "data-testid": "pj-cl-need-transcript", hidden: true }, t("pj.cl.needTranscript"));
   const suggestionsHost = h("div", { class: "stack", "data-testid": "pj-cl-suggestions" });
@@ -271,6 +272,7 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
 
   function update(next: ProjectState): void {
     state = next;
+    llmHint.textContent = t(next.settings.llmRemote ? "pj.cl.llm.hint.remote" : "pj.cl.llm.hint");
     const transcriptReady = next.project.transcript.status === "done";
     suggestButton.disabled = searching || !transcriptReady;
     needTranscript.hidden = transcriptReady;
@@ -296,7 +298,7 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
     "div",
     { class: "stack", "data-testid": "pj-clips" },
     h("p", { class: "hint" }, t("pj.cl.lead")),
-    h("div", { class: "row" }, suggestButton, h("label", { class: "check" }, llmToggle, h("span", {}, t("pj.cl.llm"), h("span", { class: "hint ex-hint" }, t("pj.cl.llm.hint"))))),
+    h("div", { class: "row" }, suggestButton, h("label", { class: "check" }, llmToggle, h("span", {}, t("pj.cl.llm"), llmHint))),
     needTranscript,
     suggestionsHost,
     conflictHost,
