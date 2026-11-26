@@ -425,6 +425,12 @@ capture source, which `FAKE_MEDIA_ARGS` does); set `E2E_SCREEN=0` to leave the s
   http://localhost:8080` (the second argument, or `PUBLIC_URL`, is the address you open it at; it needs the container's
   `TOKEN_SIGNING_SECRET` and the data volume, so it is as powerful as shell access to the server). Single use is recorded
   in the session record; rotating `TOKEN_SIGNING_SECRET` invalidates every token, claim links included.
+- Captions are placed for the whole canvas, not per scene: in the 16:9 screen layout the lower caption line can run under
+  the small camera picture in the corner. Where two people speak at once the transcript interleaves their words by time, so
+  a caption line can mix both voices; check the captions of such stretches before burning them in.
+- A screen share is picked up for the stretch in which it was recorded; the layout there is the screen with the speaker's
+  camera in the corner, and the cameras follow the speaker before and after. Transitions are hard cuts, and the vertical
+  shape is a centre crop of the featured picture (no face tracking).
 - Local copies live in the browser's origin storage. Clearing site data deletes them, so keep them until the collector
   shows each track as ready.
 - The S3-compatible driver stores every uploaded part as its own object and streams the remuxed files with multipart
