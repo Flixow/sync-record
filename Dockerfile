@@ -46,7 +46,7 @@ COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY assets ./assets
-RUN mkdir -p /data /models && chown node:node /data /models
+RUN mkdir -p /data /models && chmod -R a+rX /app && chown node:node /data /models
 USER node
 VOLUME ["/data", "/models"]
 EXPOSE 8080

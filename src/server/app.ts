@@ -306,7 +306,9 @@ export function createApp(config: Config, storage: Storage, asr?: AsrEngine): Ap
       res.end();
       return;
     }
-    createReadStream(target).pipe(res);
+    const stream = createReadStream(target);
+    stream.on("error", () => res.destroy());
+    stream.pipe(res);
   }
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {

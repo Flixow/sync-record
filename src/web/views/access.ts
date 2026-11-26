@@ -14,7 +14,6 @@ export function noAccessView(): HTMLElement {
 
 const redeeming = new Map<string, Promise<void>>();
 
-/** Exchanges the single-use claim token from the URL fragment for host credentials stored in this browser, then opens the project. */
 export function claimView(sid: string, claimToken: string | null, navigate: (path: string) => void): HTMLElement {
   const status = h("div", { "data-testid": "claim-status" });
   const show = (kind: "info" | "error", text: string): void => status.replaceChildren(banner(kind, text, kind === "error" ? "claim-error" : undefined));
@@ -45,7 +44,6 @@ export function claimView(sid: string, claimToken: string | null, navigate: (pat
   return page(h("section", { class: "hero narrow" }, h("h1", {}, t("claim.title"))), card(null, status, h("a", { class: "btn", href: "/" }, t("access.home"))));
 }
 
-/** A button that issues a single-use link; opening it in another browser gives that browser the host credentials. */
 export function claimLinkPanel(api: SessionApi): HTMLElement {
   const out = h("div", { class: "stack" });
   const button = h("button", {

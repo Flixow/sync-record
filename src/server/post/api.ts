@@ -77,7 +77,9 @@ export async function serveProjectFile(req: IncomingMessage, res: ServerResponse
     res.end();
     return;
   }
-  createReadStream(target, { start, end }).pipe(res);
+  const stream = createReadStream(target, { start, end });
+  stream.on("error", () => res.destroy());
+  stream.pipe(res);
 }
 
 /** Routes below `/api/sessions/<sid>/project`. The caller has already checked that the token belongs to the host. */
