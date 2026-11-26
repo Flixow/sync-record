@@ -12,7 +12,8 @@ SyncRecord is for podcasts and interviews held over a call (Google Meet or any c
 talking. Each participant opens a SyncRecord link in their own browser and records their own microphone, camera and
 optionally their screen **on their own computer**, so the quality never depends on the connection. The files are
 uploaded in the background to a collector you host. After the session the collector remuxes every track and writes a
-manifest with the start time of each track on one shared clock, ready for post-production.
+manifest with the start time of each track on one shared clock. The host then opens the session's project page to
+transcribe, cut, lay out, caption and export the recording (see [Post-production](#post-production)).
 
 There are no accounts, no payments and no cloud service: an invite link carries a signed token and storage is a local
 directory or any S3-compatible bucket you choose.
@@ -32,6 +33,15 @@ directory or any S3-compatible bucket you choose.
 - Setup screen with device check, headphone confirmation (with a one-click skip), a speaker-bleed test, explicit
   recording consent and a live roster that shows who is recording what.
 - English and Polish interface.
+- Post-production on the collector, all local: transcript (faster-whisper, model chosen by available memory), cutting
+  by transcript, silence removal, active-speaker and screen-share layouts (16:9, 9:16, 1:1), captions, loudness-normalised
+  YouTube and audio exports, 20-90 s vertical clips and publish drafts (chapters, titles, thumbnails). Nothing is
+  published anywhere by SyncRecord.
+- Optional extras, both **off by default**: a language-model provider (`LLM_URL`; clip ranking, chapter titles, title
+  drafts and a model-driven scene plan, see [Optional language model](#optional-language-model)) and server-side
+  telemetry to your own PostHog (`POSTHOG_KEY` and `POSTHOG_HOST`, see [Telemetry](#telemetry)).
+- Host access across browsers: the host's project page can be opened elsewhere with a one-time claim link (see
+  [Limits and honest notes](#limits-and-honest-notes)).
 - Collector: small Node/TypeScript server, configured by environment variables only, runs with plain Node or Docker.
 
 ## Requirements
@@ -422,7 +432,7 @@ capture source, which `FAKE_MEDIA_ARGS` does); set `E2E_SCREEN=0` to leave the s
   remuxed tracks and manifest written to the bucket) against a local SeaweedFS S3 gateway with path-style addressing.
 - Only one browser tab per session and device can record; a second tab is asked to wait until the first one is closed.
 - A participant who joins twice (for example after clearing site data) uses up a second place; there is no way to remove
-  a participant in v1.
+  a participant.
 - Remuxing browser output with `-c copy` can log `non monotonically increasing dts` warnings for variable frame rate
   screen captures. The files stay valid and seekable; drift and frame-rate fixes belong to post-production.
 - A single collector process owns a session; running several replicas against one bucket is not supported.
