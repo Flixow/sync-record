@@ -162,6 +162,9 @@ export function wrapLines(words: string[], maxChars: number, maxLines: number): 
   return best;
 }
 
+/** The shortest a cue stays on screen when neighbouring cues are trimmed or moved. */
+const MIN_CUE_MS = 100;
+
 /** Groups words (already on the time axis of the output) into cues: one speaker per cue, sentence and pause aware. */
 export function buildCues(words: TranscriptWord[], nameOf: (pid: string) => string, options: CueOptions = DEFAULT_CUES): Cue[] {
   const cues: Cue[] = [];
@@ -187,11 +190,20 @@ export function buildCues(words: TranscriptWord[], nameOf: (pid: string) => stri
     current.push(word);
   }
   flush();
-  // a cue never overlaps the next one of the same stream
+  // A cue never overlaps the next one: the earlier cue is cut at the start of the next. When the two start within the
+  // minimum length of each other (two speakers saying the same thing together), the later cue moves back instead, so
+  // that every cue keeps a positive length and starts are still ascending.
   for (let i = 0; i + 1 < cues.length; i++) {
     const a = cues[i];
     const b = cues[i + 1];
-    if (a && b && a.endMs > b.startMs) a.endMs = Math.max(a.startMs + 100, b.startMs);
+    if (!a || !b || a.endMs <= b.startMs) continue;
+    if (b.startMs >= a.startMs + MIN_CUE_MS) {
+      a.endMs = b.startMs;
+    } else {
+      a.endMs = a.startMs + MIN_CUE_MS;
+      b.startMs = a.endMs;
+      b.endMs = Math.max(b.endMs, b.startMs + MIN_CUE_MS);
+    }
   }
   return cues;
 }

@@ -225,8 +225,8 @@ test("two participants record, one tab is killed and resumes, the collector outp
   // ---- post-production: media preparation, transcript (stand-in engine) and subtitle exports ----
   await host.getByTestId("open-project").click();
   await expect(host).toHaveURL(/\/project\//);
-  const create = host.getByTestId("pj-create");
-  if (await create.isVisible().catch(() => false)) await create.click();
+  // The project does not exist yet: the page offers to create it once its state has loaded (click waits for the button).
+  await host.getByTestId("pj-create").click();
   await host.getByTestId("pj-prepare").click();
   await expect(host.getByTestId("pj-conform-status")).toHaveAttribute("data-status", "done", { timeout: 180_000 });
   await host.getByTestId("pj-tr-lang").selectOption("en");

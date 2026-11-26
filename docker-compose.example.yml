@@ -11,7 +11,10 @@ services:
       - "8080:8080"
     volumes:
       - recordings:/data
+      # Speech models (downloaded on the first transcript job, about 1.6 GB); keep them across upgrades.
+      - models:/models
     restart: unless-stopped
 
 volumes:
   recordings:
+  models:

@@ -49,7 +49,7 @@ export interface PostConfig {
   /** Directory where speech models are downloaded to on first use (never inside the repository). */
   modelsDir: string;
   /** Python with faster-whisper installed, and the model it runs (downloaded into `modelsDir` on first use). */
-  asr: { python: string; model: string };
+  asr: { python: string; model: string; computeType: string };
   /** Optional local llama.cpp server for ranking and titles. Null (the default) keeps every feature on its built-in heuristics. */
   llm: null | { url: string; model: string };
 }
@@ -68,6 +68,14 @@ function integer(env: Env, key: string, fallback: number, min: number, max: numb
   if (!Number.isInteger(value) || value < min || value > max) {
     throw new Error(`${key} must be an integer between ${min} and ${max}`);
   }
+  return value;
+}
+
+/** CTranslate2 compute types (faster-whisper `compute_type`); the engine checks what the CPU supports. */
+const COMPUTE_TYPES = ["default", "auto", "int8", "int8_float32", "int8_float16", "int8_bfloat16", "int16", "float16", "bfloat16", "float32"];
+
+function computeType(value: string): string {
+  if (!COMPUTE_TYPES.includes(value)) throw new Error(`ASR_COMPUTE_TYPE must be one of ${COMPUTE_TYPES.join(", ")}`);
   return value;
 }
 
@@ -143,7 +151,11 @@ export function loadConfig(env: Env = process.env): Config {
       loudnessLufs: number(env, "LOUDNESS_LUFS", -16, -40, -5),
       truePeakDb: number(env, "TRUE_PEAK_DBTP", -1, -9, 0),
       modelsDir: path.resolve(text(env, "MODELS_DIR") ?? path.join(postDir, "models")),
-      asr: { python: text(env, "ASR_PYTHON") ?? "python3", model: text(env, "ASR_MODEL") ?? "deepdml/faster-whisper-large-v3-turbo-ct2" },
+      asr: {
+        python: text(env, "ASR_PYTHON") ?? "python3",
+        model: text(env, "ASR_MODEL") ?? "deepdml/faster-whisper-large-v3-turbo-ct2",
+        computeType: computeType(text(env, "ASR_COMPUTE_TYPE") ?? "int8"),
+      },
       llm: llmUrl ? { url: llmUrl, model: text(env, "LLM_MODEL") ?? "default" } : null,
     },
   };

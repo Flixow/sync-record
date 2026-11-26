@@ -20,6 +20,17 @@ async function durationOf(ffprobePath: string, file: string): Promise<number> {
   return Number(stdout.trim());
 }
 
+/**
+ * Where a video file ends on its own timeline. The container's duration counts from the first frame, which sits one
+ * frame after zero when the start offset rounds up to the next frame (the proxy then starts with an empty edit, not
+ * with a frame), so the duration alone is up to a frame short of the position the last frame ends at.
+ */
+export async function timelineEndOf(ffprobePath: string, file: string): Promise<number> {
+  const { stdout } = await run(ffprobePath, ["-v", "error", "-show_entries", "format=start_time,duration", "-of", "default=nw=1", file]);
+  const value = (key: string): number => Number(new RegExp(`^${key}=(.+)$`, "m").exec(stdout)?.[1] ?? "NaN");
+  return value("start_time") + value("duration");
+}
+
 /** The audio filter that puts a source on the project timeline: drift correction, start offset, padding to the project length. */
 export function audioConformFilter(source: Pick<ProjectSource, "rate" | "driftApplied" | "offsetMs">, projectDurationSec: number): string {
   const chain: string[] = [];
@@ -51,11 +62,18 @@ export function videoProxyFilter(source: Pick<ProjectSource, "rate" | "offsetMs"
   return videoTimelineFilter(source, fps, [`scale=-2:${PROXY_HEIGHT}:flags=bilinear`]);
 }
 
+/**
+ * How far a video proxy may end from the end of its source on the timeline, in frames: the start rounds to the nearest
+ * frame, the frame rate conversion ends the last frame up to half a frame off, and the source's own duration (the
+ * container's estimate for a variable-frame-rate recording) is itself good to about a frame.
+ */
+const VIDEO_END_TOLERANCE_FRAMES = 2;
+
 export interface ConformCheck {
   file: string;
   expectedSec: number;
   actualSec: number;
-  withinFrame: boolean;
+  inTolerance: boolean;
 }
 
 export interface ConformDeps {
@@ -168,7 +186,7 @@ export function conformHandler(deps: ConformDeps) {
             await writeAnalysis(ctx, deps, absolute, peaksAbsolute, levelsAbsolute);
           }
           const actual = await durationOf(deps.config.ffprobePath, absolute);
-          checks.push({ file: audioFile, expectedSec: projectSec, actualSec: actual, withinFrame: Math.abs(actual - projectSec) <= frameSec });
+          checks.push({ file: audioFile, expectedSec: projectSec, actualSec: actual, inTolerance: Math.abs(actual - projectSec) <= frameSec });
           await deps.store.update(sid, (draft) => {
             const target = draft.sources.find((candidate) => candidate.id === source.id);
             if (target) target.audio = { file: audioFile, peaks: peaksFile, levels: levelsFile };
@@ -193,8 +211,8 @@ export function conformHandler(deps: ConformDeps) {
             await rename(temp, absolute);
           }
           const expected = (source.offsetMs + source.timelineDurationMs) / 1000;
-          const actual = await durationOf(deps.config.ffprobePath, absolute);
-          checks.push({ file: videoFile, expectedSec: expected, actualSec: actual, withinFrame: Math.abs(actual - expected) <= frameSec });
+          const actual = await timelineEndOf(deps.config.ffprobePath, absolute);
+          checks.push({ file: videoFile, expectedSec: expected, actualSec: actual, inTolerance: Math.abs(actual - expected) <= VIDEO_END_TOLERANCE_FRAMES * frameSec });
           await deps.store.update(sid, (draft) => {
             const target = draft.sources.find((candidate) => candidate.id === source.id);
             if (target) target.video = { file: videoFile, width: Math.round(((source.width ?? 16) / (source.height ?? 9)) * PROXY_HEIGHT / 2) * 2, height: PROXY_HEIGHT, fps: project.fps };
@@ -205,7 +223,7 @@ export function conformHandler(deps: ConformDeps) {
 
       const mix = await buildMix(ctx, deps, await deps.store.require(sid), dir, (fraction) => ctx.progress((doneWeight + fraction * projectSec * 0.5) / total, "mix"));
       if (mix) checks.push(mix);
-      const late = checks.filter((check) => !check.withinFrame);
+      const late = checks.filter((check) => !check.inTolerance);
       if (late.length > 0) {
         throw new Error(`duration check failed: ${late.map((check) => `${check.file} expected ${check.expectedSec.toFixed(3)} s, got ${check.actualSec.toFixed(3)} s`).join("; ")}`);
       }
@@ -247,5 +265,5 @@ async function buildMix(ctx: JobContext, deps: ConformDeps, project: ProjectFile
   });
   const actual = await durationOf(deps.config.ffprobePath, absolute);
   // AAC pads its last frame: allow the encoder delay on top of one video frame.
-  return { file, expectedSec: projectSec, actualSec: actual, withinFrame: Math.abs(actual - projectSec) <= 1 / project.fps + 0.05 };
+  return { file, expectedSec: projectSec, actualSec: actual, inTolerance: Math.abs(actual - projectSec) <= 1 / project.fps + 0.05 };
 }

@@ -61,6 +61,15 @@ describe("cues and formats", () => {
     expect(validateVtt(vtt)).toEqual([]);
   });
 
+  it("keeps cues apart when two speakers start within a few milliseconds of each other", () => {
+    const together = [word("Hello,", 1000, 1500, "a", "p1"), word("hello,", 1040, 1540, "b", "p2"), word("world.", 1600, 2100, "a", "p1"), word("world.", 1640, 2140, "b", "p2")];
+    const cues = buildCues(together, names);
+    expect(cues.length).toBeGreaterThan(1);
+    for (const cue of cues) expect(cue.endMs).toBeGreaterThan(cue.startMs);
+    expect(validateSrt(toSrt(cues, true))).toEqual([]);
+    expect(validateVtt(toVtt(cues, true))).toEqual([]);
+  });
+
   it("detects broken subtitle files", () => {
     expect(validateSrt("1\n00:00:02,000 --> 00:00:01,000\nx\n")).not.toEqual([]);
     expect(validateSrt("2\n00:00:01,000 --> 00:00:02,000\nx\n")).not.toEqual([]);
