@@ -1,12 +1,13 @@
 import type { Range } from "../../shared/edl.js";
 import type { JobRecord, ProjectFile } from "../../shared/project.js";
-import { ApiError } from "../lib/api.js";
+import { ApiError, SessionApi } from "../lib/api.js";
 import { h, setChildren } from "../lib/dom.js";
 import type { ProjectApi, ProjectState } from "../lib/project-api.js";
 import { formatBytes, formatDuration } from "../lib/storage-math.js";
 import { t } from "../i18n/index.js";
 import { clipsPanel, type ClipsPanel } from "./clips-panel.js";
 import { exportPanel, type ExportPanel } from "./export-panel.js";
+import { claimLinkPanel } from "./access.js";
 import { banner, card, page } from "./layout.js";
 import { layoutPanel, type LayoutPanel } from "./layout-panel.js";
 import { publishPanel, type PublishPanel } from "./publish-panel.js";
@@ -335,7 +336,7 @@ export function projectView(api: ProjectApi): { el: HTMLElement; dispose: () => 
     syncPublishing(state);
   }
 
-  const el = page(card(t("pj.title"), notice, body));
+  const el = page(card(t("pj.title"), claimLinkPanel(new SessionApi(api.sid, api.token)), notice, body));
   void refresh();
   return {
     el,

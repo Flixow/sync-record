@@ -7,6 +7,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Config } from "../config.js";
 import { runTool, ToolError, type ToolContext } from "./exec.js";
+import { memoryCapacityBytes, modelsFittingIn, smallestTierBytes } from "./memory.js";
 
 export const ASR_SAMPLE_RATE = 16_000;
 
@@ -74,20 +75,44 @@ interface HelperResult {
   files: { lang: string; words: AsrWord[] }[];
 }
 
+const mib = (bytes: number): number => Math.round(bytes / 1024 ** 2);
+
+const wasKilled = (error: unknown): boolean => error instanceof ToolError && (error.signal === "SIGKILL" || error.code === 137);
+
 export class FasterWhisperEngine implements AsrEngine {
   readonly id = "faster-whisper";
-  readonly model: string;
+  private readonly candidates: string[];
+  private readonly explicit: boolean;
+  private index = 0;
 
-  constructor(private readonly config: Config) {
-    this.model = config.post.asr.model;
-    if (!MODEL_NAME.test(this.model) || this.model.includes("..")) throw new Error("ASR_MODEL is not a valid model name");
+  constructor(
+    private readonly config: Config,
+    private readonly capacityBytes: number | null = memoryCapacityBytes(),
+  ) {
+    const chosen = config.post.asr.model;
+    this.explicit = chosen !== null;
+    if (chosen !== null && (!MODEL_NAME.test(chosen) || chosen.includes(".."))) throw new Error("ASR_MODEL is not a valid model name");
+    this.candidates = chosen === null ? modelsFittingIn(capacityBytes) : [chosen];
   }
 
-  private async call(ctx: ToolContext, files: string[], lang: string | null, threads: number): Promise<HelperResult> {
+  get model(): string {
+    return this.candidates[this.index] ?? "none";
+  }
+
+  private tooLittleMemory(detail?: string): Error {
+    const have = this.capacityBytes === null ? "unknown" : `${mib(this.capacityBytes)} MiB`;
+    return new Error(
+      `Not enough memory for speech recognition: ${have} available to the server, the smallest model needs about ${mib(smallestTierBytes())} MiB.` +
+        (detail ? ` ${detail}` : "") +
+        " Free memory or give the container (and the Docker VM) more.",
+    );
+  }
+
+  private async run(ctx: ToolContext, model: string, files: string[], lang: string | null, threads: number): Promise<HelperResult> {
     const root = this.config.post.modelsDir;
     await mkdir(root, { recursive: true });
     const out = path.join(root, `.result-${ctx.jobId}-${Date.now()}.json`);
-    const request = JSON.stringify({ model: this.model, compute: this.config.post.asr.computeType, root, threads, lang, files, out });
+    const request = JSON.stringify({ model, compute: this.config.post.asr.computeType, root, threads, lang, files, out });
     try {
       await runTool(ctx, this.config.post.asr.python, ["-c", HELPER, request], { env: { HF_HUB_DISABLE_TELEMETRY: "1", HF_HOME: path.join(root, "hf"), TOKENIZERS_PARALLELISM: "false" } });
       return JSON.parse(await readFile(out, "utf8")) as HelperResult;
@@ -98,6 +123,22 @@ export class FasterWhisperEngine implements AsrEngine {
       throw error;
     } finally {
       await rm(out, { force: true });
+    }
+  }
+
+  private async call(ctx: ToolContext, files: string[], lang: string | null, threads: number): Promise<HelperResult> {
+    for (;;) {
+      if (this.index >= this.candidates.length) throw this.tooLittleMemory();
+      const model = this.model;
+      try {
+        return await this.run(ctx, model, files, lang, threads);
+      } catch (error) {
+        if (!wasKilled(error)) throw error;
+        const detail = `Model ${model} was killed by the system. (${error instanceof Error ? error.message : "SIGKILL"})`;
+        if (this.explicit || this.index + 1 >= this.candidates.length) throw this.tooLittleMemory(detail);
+        console.warn(`speech model ${model} was killed for lack of memory, falling back to ${this.candidates[this.index + 1]}`);
+        this.index += 1;
+      }
     }
   }
 

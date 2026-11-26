@@ -1,7 +1,10 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import {
+  CLAIM_MINUTES,
   MAX_PARTICIPANTS,
+  type ClaimLinkResponse,
+  type ClaimResponse,
   type ClockResponse,
   type DeclareTrackRequest,
   type FinalizeRequest,
@@ -21,9 +24,10 @@ import { buildManifest } from "./manifest.js";
 import type { ParticipantRecord, SessionRecord, TrackRecord } from "./model.js";
 import { remuxTrack } from "./remux.js";
 import type { Storage } from "./storage/index.js";
-import { issueToken } from "./tokens.js";
+import { issueToken, type TokenClaims } from "./tokens.js";
 
 const MARKER_LEAD_MS = 3000;
+export const CLAIM_TTL_MS = CLAIM_MINUTES * 60_000;
 const PART_NAME = /^\d{12}$/;
 
 interface Presence {
@@ -142,6 +146,34 @@ export class Collector {
       maxParticipants: MAX_PARTICIPANTS,
       roster: this.roster(runtime),
     };
+  }
+
+  async claimToken(sid: string, pid: string): Promise<ClaimLinkResponse> {
+    const runtime = await this.load(sid);
+    if (!this.participant(runtime, pid).host) throw new HttpError(403, "host_only");
+    const expiresAtMs = Date.now() + CLAIM_TTL_MS;
+    const claimToken = issueToken(this.config.tokenSecret, { sid, role: "claim", pid, jti: randomUUID(), exp: expiresAtMs });
+    return { claimToken, expiresAtMs };
+  }
+
+  async hostClaimToken(sid: string): Promise<ClaimLinkResponse> {
+    const runtime = await this.load(sid);
+    const host = runtime.record.participants.find((participant) => participant.host);
+    if (!host) throw new HttpError(404, "host_not_found");
+    return this.claimToken(sid, host.id);
+  }
+
+  async redeemClaim(sid: string, claim: TokenClaims): Promise<ClaimResponse> {
+    const runtime = await this.load(sid);
+    const host = claim.pid ? runtime.record.participants.find((participant) => participant.id === claim.pid) : undefined;
+    if (!host?.host || !claim.jti) throw new HttpError(403, "forbidden");
+    const now = Date.now();
+    const used = (runtime.record.usedClaims ?? []).filter((entry) => entry.exp >= now);
+    if (used.some((entry) => entry.jti === claim.jti)) throw new HttpError(403, "claim_used");
+    used.push({ jti: claim.jti, exp: claim.exp });
+    runtime.record.usedClaims = used;
+    await this.persist(runtime);
+    return { sessionId: sid, participantId: host.id, participantToken: this.participantToken(sid, host), name: host.name };
   }
 
   clock(): ClockResponse {

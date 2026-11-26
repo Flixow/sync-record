@@ -30,16 +30,16 @@ RUN apt-get update \
     && apt-get clean \
     && find /var/lib/apt/lists -type f -delete
 WORKDIR /app
-# The model is not baked into the image (about 1.6 GB): it downloads into MODELS_DIR on the first transcript job and
-# stays in the /models volume across container and image upgrades. Change the model or compute type with ASR_MODEL
-# and ASR_COMPUTE_TYPE; a model name other than the default downloads on its first use.
+# The model is not baked into the image (the large one is about 1.6 GB): it downloads into MODELS_DIR on the first
+# transcript job and stays in the /models volume across container and image upgrades. Without ASR_MODEL the server picks
+# the largest model that fits the container's memory (large-v3-turbo, small or base); set ASR_MODEL to pin one.
+# ASR_COMPUTE_TYPE changes the compute type.
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=8080 \
     STORAGE_LOCAL_DIR=/data \
     PATH=/opt/asr/bin:$PATH \
     MODELS_DIR=/models \
-    ASR_MODEL=deepdml/faster-whisper-large-v3-turbo-ct2 \
     ASR_COMPUTE_TYPE=int8
 COPY --from=asr /opt/asr /opt/asr
 COPY --from=build /app/package.json ./

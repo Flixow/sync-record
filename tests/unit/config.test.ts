@@ -32,7 +32,7 @@ describe("loadConfig", () => {
   });
 
   it("reads the speech engine settings and rejects an unknown compute type", () => {
-    expect(loadConfig(base).post.asr).toEqual({ python: "python3", model: "deepdml/faster-whisper-large-v3-turbo-ct2", computeType: "int8" });
+    expect(loadConfig(base).post.asr).toEqual({ python: "python3", model: null, computeType: "int8" });
     const config = loadConfig({ ...base, ASR_MODEL: "small", ASR_COMPUTE_TYPE: "float32", ASR_PYTHON: "/opt/asr/bin/python", MODELS_DIR: "/models" });
     expect(config.post.asr).toEqual({ python: "/opt/asr/bin/python", model: "small", computeType: "float32" });
     expect(config.post.modelsDir).toBe("/models");

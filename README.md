@@ -71,7 +71,7 @@ The image also carries the speech engine for **Transcribe**: `python3` and `fast
 virtualenv on `PATH`). The model is **not** in the image (about 1.6 GB): it downloads into `MODELS_DIR` (`/models`, a
 volume, so it survives container and image upgrades) on the first transcript job, which needs outbound access to
 huggingface.co once and takes a few minutes. Mount the `/models` volume (the compose example does) so it is downloaded
-only once. `ASR_MODEL` and `ASR_COMPUTE_TYPE` change the model and the compute type. To check an image:
+only once. `ASR_MODEL` and `ASR_COMPUTE_TYPE` change the model and the compute type (see [Transcript and highlights](#transcript-and-highlights) for the automatic choice). To check an image:
 
 ```sh
 npm run smoke:image -- sync-record   # transcribes a short Polish fixture inside the image; first run downloads the model
@@ -101,7 +101,7 @@ Everything is read from the environment (see `.env.example`). Nothing is hardcod
 | `LOUDNESS_LUFS`, `TRUE_PEAK_DBTP` | `-16`, `-1` | Default loudness target and true-peak ceiling of exports. |
 | `MODELS_DIR` | `<POST_DIR>/models` (`/models` in the Docker image) | Where speech models are downloaded on first use. Models never go into git. |
 | `ASR_PYTHON` | `python3` | A Python with `faster-whisper` installed (`pip install faster-whisper`; the Docker image has it); the transcript job runs it as a child process. |
-| `ASR_MODEL` | `deepdml/faster-whisper-large-v3-turbo-ct2` | faster-whisper model; `small` is a faster, less accurate choice (about 2.5x as fast; 17% instead of 7% word error rate on Polish). |
+| `ASR_MODEL` | unset (chosen by memory) | faster-whisper model. Unset: `deepdml/faster-whisper-large-v3-turbo-ct2` with 3 GiB or more, `small` from 2 GiB, `base` from 600 MiB, with a fall back to the next smaller one when the system kills the process for memory. Set it to pin a model; `small` is a faster, less accurate choice (about 2.5x as fast; 17% instead of 7% word error rate on Polish). |
 | `ASR_COMPUTE_TYPE` | `int8` | CTranslate2 compute type of the model on the CPU: `int8`, `int8_float32`, `int16`, `float32`, `auto`, ... (an unsupported one fails the transcript job). |
 | `LLM_URL` | empty | Optional chat-completions endpoint (base URL of an OpenAI-compatible server) for the language-model features: clip re-ranking, chapter titles, title and description drafts, scene-plan suggestions. Empty = off, and every feature works without it. See [Optional language model](#optional-language-model). |
 | `LLM_PROVIDER` | `openai-compatible` | `openai-compatible` (llama.cpp, Ollama, LiteLLM, OpenRouter, OpenAI, any server with `/v1/chat/completions`; key optional) or `omp-gateway` (an OMP auth gateway; key and model required). |
@@ -154,9 +154,13 @@ project page.
 **Transcribe** runs a local speech-to-text job (no cloud). Each track is searched for speech first (energy on the level
 track, and a track counts as speaking only when it is not just another speaker's voice leaking into its microphone), so
 silent stretches and bleed never reach the engine and a silent track produces no text. The engine is
-[faster-whisper](https://github.com/SYSTRAN/faster-whisper) with `large-v3-turbo` in int8 on the CPU; it needs a Python
+[faster-whisper](https://github.com/SYSTRAN/faster-whisper) in int8 on the CPU; it needs a Python
 with `faster-whisper` installed (`ASR_PYTHON`; the Docker image has it) and downloads the model into `MODELS_DIR` on first use, never into the
-repository. Words carry their own start and end on the project timeline; words heard on two tracks at once are reduced to
+repository. Without `ASR_MODEL` the server picks the largest model that fits its memory (the lower of the container's
+cgroup limit and the machine's memory): `large-v3-turbo` from 3 GiB, `small` from 2 GiB, `base` from 600 MiB. If the system
+still kills the speech process for lack of memory, the server drops to the next smaller model and remembers that until it
+restarts; when even `base` does not fit, the job fails with a "Not enough memory" message that names the limit. A model
+pinned with `ASR_MODEL` is never replaced. `base` is fast and small but noticeably less accurate, especially in Polish. Words carry their own start and end on the project timeline; words heard on two tracks at once are reduced to
 the louder one. The language is detected per project or set by hand. The transcript is searchable, click-to-seek, and
 exports as SRT, VTT or plain text (with or without speaker names). Pressing **M** (or the button) while recording drops
 a highlight marker into every active recording; the markers show up as chips above the transcript.
@@ -399,6 +403,18 @@ capture source, which `FAKE_MEDIA_ARGS` does); set `E2E_SCREEN=0` to leave the s
   `SESSION_CREATE_KEY` if it is reachable from the internet.
 - Tokens are passed in the `Authorization` header, except the live event stream, which uses a query parameter because
   `EventSource` cannot set headers. Do not log request URLs on the collector's proxy.
+- Host access lives in one browser. The credentials of the host (a signed token) are stored in the origin storage of the
+  browser where the session was created, so `/project/<id>` opens only there; anywhere else it shows a message saying so
+  instead of the join form. To open a project in another browser, click **Open in another browser** on the project page: it
+  issues a host claim link (`/claim/<id>#<token>`) that works once and expires after 5 minutes. Opening it stores host
+  credentials in that browser and goes to the project. The token travels in the URL fragment, so it is not sent to the
+  server or a proxy with the page request, is removed from the address bar on open and is exchanged through a request
+  header. A claim link is a bearer secret for the whole session while it is valid: share it only with yourself, and
+  treat anyone who sees it within five minutes as able to become host. Someone who runs the server and has lost every
+  browser can issue one without a browser: `docker compose exec collector node dist/server/claim-cli.js <sessionId>
+  http://localhost:8080` (the second argument, or `PUBLIC_URL`, is the address you open it at; it needs the container's
+  `TOKEN_SIGNING_SECRET` and the data volume, so it is as powerful as shell access to the server). Single use is recorded
+  in the session record; rotating `TOKEN_SIGNING_SECRET` invalidates every token, claim links included.
 - Local copies live in the browser's origin storage. Clearing site data deletes them, so keep them until the collector
   shows each track as ready.
 - The S3-compatible driver stores every uploaded part as its own object and streams the remuxed files with multipart

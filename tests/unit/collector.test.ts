@@ -72,6 +72,45 @@ describe("sessions and access", () => {
     expect((await api(server, "GET", `/api/sessions/${host.sessionId}`)).status).toBe(401);
   });
 
+  it("issues a host claim link that works once, only for the host, and is not a participant token", async () => {
+    const host = await session();
+    const guest = (await api(server, "POST", `/api/sessions/${host.sessionId}/join`, { token: host.inviteToken, json: { name: "B" } })).body as { participantToken: string };
+    expect((await api(server, "POST", `/api/sessions/${host.sessionId}/claim-links`, { token: guest.participantToken, json: {} })).status).toBe(403);
+
+    const issued = await api(server, "POST", `/api/sessions/${host.sessionId}/claim-links`, { token: host.participantToken, json: {} });
+    expect(issued.status).toBe(201);
+    const claimToken = issued.body.claimToken as string;
+    expect((issued.body.expiresAtMs as number) - Date.now()).toBeLessThanOrEqual(5 * 60_000);
+
+    expect((await api(server, "GET", `/api/sessions/${host.sessionId}`, { token: claimToken })).status).toBe(403);
+    const redeemed = await api(server, "POST", `/api/sessions/${host.sessionId}/claim`, { token: claimToken, json: {} });
+    expect(redeemed.status).toBe(200);
+    expect(redeemed.body).toMatchObject({ participantId: host.participantId, name: "Alex Żółć" });
+    const manifest = await api(server, "GET", `/api/sessions/${host.sessionId}/manifest`, { token: redeemed.body.participantToken as string });
+    expect(manifest.status).toBe(200);
+
+    const again = await api(server, "POST", `/api/sessions/${host.sessionId}/claim`, { token: claimToken, json: {} });
+    expect(again.status).toBe(403);
+    expect(again.body.error).toBe("claim_used");
+    expect((await api(server, "POST", `/api/sessions/${host.sessionId}/claim`, { token: host.participantToken, json: {} })).status).toBe(403);
+  });
+
+  it("refuses a claim link after it expired and one issued for another session", async () => {
+    await server.close();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      server = await startServer();
+      const host = await session();
+      const other = await session();
+      const issued = (await api(server, "POST", `/api/sessions/${host.sessionId}/claim-links`, { token: host.participantToken, json: {} })).body.claimToken as string;
+      expect((await api(server, "POST", `/api/sessions/${other.sessionId}/claim`, { token: issued, json: {} })).status).toBe(403);
+      vi.setSystemTime(Date.now() + 5 * 60_000 + 1000);
+      expect((await api(server, "POST", `/api/sessions/${host.sessionId}/claim`, { token: issued, json: {} })).status).toBe(401);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the host's invite link valid: the host's visit renews the invite token, a guest's visit does not", async () => {
     await server.close();
     vi.useFakeTimers({ toFake: ["Date"] });
