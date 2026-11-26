@@ -75,6 +75,8 @@ export class Collector {
   private remuxChain: Promise<void> = Promise.resolve();
   private readonly remuxing = new Set<string>();
   private readonly heartbeat: NodeJS.Timeout;
+  /** Called when a track could not be remuxed (the telemetry hook; carries nothing). */
+  onRemuxFailed: (() => void) | null = null;
 
   constructor(
     private readonly config: Config,
@@ -134,6 +136,7 @@ export class Collector {
     const caller = this.participant(runtime, pid);
     return {
       renewedToken: this.participantToken(sid, caller),
+      ...(caller.host ? { renewedInviteToken: this.inviteToken(sid) } : {}),
       sessionId: sid,
       ended: runtime.record.endedAtMs !== null,
       maxParticipants: MAX_PARTICIPANTS,
@@ -146,15 +149,18 @@ export class Collector {
     return { serverRecvMs, serverSendMs: nowMs() };
   }
 
-  async setStatus(sid: string, pid: string, request: StatusRequest): Promise<void> {
+  /** Returns the state the participant reported before this call (undefined for the first report). */
+  async setStatus(sid: string, pid: string, request: StatusRequest): Promise<PresenceState | undefined> {
     const runtime = await this.load(sid);
     const participant = this.participant(runtime, pid);
+    const before = runtime.presence.get(pid)?.state;
     runtime.presence.set(pid, { state: request.state, kinds: request.kinds });
     if (request.consentVersion !== undefined && participant.consent === null) {
       participant.consent = { version: request.consentVersion, atMs: nowMs() };
       await this.persist(runtime);
     }
     this.broadcastRoster(runtime);
+    return before;
   }
 
   async createMarker(sid: string): Promise<MarkerEvent> {
@@ -467,6 +473,7 @@ export class Collector {
       });
       track.output = { status: "ok", file, bytes: result.bytes, durationSec: result.durationSec };
     } catch (error) {
+      this.onRemuxFailed?.();
       track.output = { status: "failed", file, bytes: 0, durationSec: null, error: error instanceof Error ? error.message.slice(0, 300) : "remux failed" };
     } finally {
       this.remuxing.delete(track.id);

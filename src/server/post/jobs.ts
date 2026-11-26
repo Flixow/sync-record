@@ -57,6 +57,8 @@ export class JobRunner {
   private closed = false;
   /** Called once when a job ends as failed (the telemetry hook; only the job kind is passed on). */
   onFailed: ((job: Pick<JobRecord, "kind">) => void) | null = null;
+  /** Called once when a job ends as done (the telemetry hook; only the job kind is passed on). */
+  onDone: ((job: Pick<JobRecord, "kind">) => void) | null = null;
 
   constructor(
     private readonly config: PostConfig,
@@ -225,6 +227,7 @@ export class JobRunner {
         job.status = "done";
         job.progress = 1;
         job.result = result ?? null;
+        this.onDone?.(job);
       } catch (error) {
         if (this.closed && (error instanceof CanceledError || controller.signal.aborted)) {
           // A clean shutdown pauses the job: the next start runs it again.

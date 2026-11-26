@@ -49,6 +49,8 @@ export interface SessionView {
   roster: RosterEntry[];
   /** A fresh token with a new expiry for the caller (sliding expiry: every visit renews it). */
   renewedToken: string;
+  /** Host only: a fresh invite token with a new expiry, so the invite link shown to the host never goes stale while the host keeps the page open. */
+  renewedInviteToken?: string;
 }
 
 export interface CreateSessionRequest {

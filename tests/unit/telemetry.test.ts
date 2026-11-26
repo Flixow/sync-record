@@ -115,19 +115,30 @@ describe("telemetry at runtime", () => {
     try {
       const created = await api(server, "POST", "/api/sessions", { json: { name: NAME } });
       const sid = created.body.sessionId as string;
-      await api(server, "POST", `/api/sessions/${sid}/end`, { token: created.body.participantToken as string, json: {} });
-      await posthog.arrived(3);
-      expect(posthog.captures.map((capture) => capture.event)).toEqual(["server_started", "session_created", "session_ended"]);
+      const host = created.body.participantToken as string;
+      const guest = (await api(server, "POST", `/api/sessions/${sid}/join`, { token: created.body.inviteToken as string, json: { name: "Gość Prywatny" } })).body.participantToken as string;
+      const status = (token: string, state: string) => api(server, "POST", `/api/sessions/${sid}/status`, { token, json: { state, kinds: ["audio", "screen"] } });
+      await status(host, "recording");
+      await status(host, "recording"); // no change: no second event
+      await status(guest, "ready");
+      await status(host, "stopped");
+      await api(server, "POST", `/api/sessions/${sid}/end`, { token: host, json: {} });
+      await api(server, "POST", `/api/sessions/${sid}/end`, { token: host, json: {} }); // a repeated end is not a second session end
+      await posthog.arrived(5);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const named = (event: string): Capture | undefined => posthog.captures.find((capture) => capture.event === event);
+      expect(posthog.captures.map((capture) => capture.event).sort()).toEqual(["recording_started", "recording_stopped", "session_created", "session_ended", "session_joined"]);
       expect(new Set(posthog.paths)).toEqual(new Set(["/capture/"]));
       for (const capture of posthog.captures) {
         expect(capture.api_key).toBe(TEST_KEY);
         expect(capture.properties).toMatchObject({ $process_person_profile: false, $geoip_disable: true });
       }
-      expect(posthog.captures[1]?.properties).not.toHaveProperty("sessionId");
-      expect(posthog.captures[2]?.properties.participants).toBe(1);
+      expect(named("session_joined")?.properties.participants).toBe(2);
+      expect(named("recording_started")?.properties).toMatchObject({ audio: true, camera: false, screen: true });
+      expect(named("session_ended")?.properties.participants).toBe(2);
       expect(new Set(posthog.captures.map((capture) => capture.distinct_id)).size).toBe(1);
       const everything = JSON.stringify(posthog.captures);
-      for (const secret of [NAME, sid, created.body.participantId as string, created.body.participantToken as string, created.body.inviteToken as string]) expect(everything).not.toContain(secret);
+      for (const secret of [NAME, "Gość", "Prywatny", sid, created.body.participantId as string, created.body.participantToken as string, created.body.inviteToken as string]) expect(everything).not.toContain(secret);
     } finally {
       await server.close();
       await posthog.close();

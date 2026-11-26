@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, hasFfmpeg, makeWebm, startServer, type TestServer } from "./helpers.js";
 
 const sha = (data: Buffer): string => createHash("sha256").update(data).digest("hex");
@@ -70,6 +70,27 @@ describe("sessions and access", () => {
     expect((await api(server, "POST", `/api/sessions/${host.sessionId}/join`, { token: host.participantToken, json: { name: "x" } })).status).toBe(403);
     expect((await api(server, "GET", `/api/sessions/${host.sessionId}`, { token: host.inviteToken })).status).toBe(403);
     expect((await api(server, "GET", `/api/sessions/${host.sessionId}`)).status).toBe(401);
+  });
+
+  it("keeps the host's invite link valid: the host's visit renews the invite token, a guest's visit does not", async () => {
+    await server.close();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      server = await startServer({ TOKEN_TTL_HOURS: "1" });
+      const host = await session();
+      vi.advanceTimersByTime(50 * 60_000);
+      const view = await api(server, "GET", `/api/sessions/${host.sessionId}`, { token: host.participantToken });
+      const renewedInvite = view.body.renewedInviteToken as string;
+      expect(renewedInvite).toBeTruthy();
+      vi.advanceTimersByTime(20 * 60_000); // the first invite is now past its hour, the renewed one is not
+      expect((await api(server, "POST", `/api/sessions/${host.sessionId}/join`, { token: host.inviteToken, json: { name: "Late" } })).status).toBe(401);
+      const joined = await api(server, "POST", `/api/sessions/${host.sessionId}/join`, { token: renewedInvite, json: { name: "Guest" } });
+      expect(joined.status).toBe(201);
+      const guestView = await api(server, "GET", `/api/sessions/${host.sessionId}`, { token: joined.body.participantToken as string });
+      expect(guestView.body.renewedInviteToken).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("restricts host actions to the host", async () => {
