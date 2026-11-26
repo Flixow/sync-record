@@ -1,6 +1,10 @@
+import { execFile } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { audioConformFilter, videoProxyFilter } from "../../src/server/post/conform.js";
+import { audioConformFilter, timelineEndOf, videoProxyFilter } from "../../src/server/post/conform.js";
 import { estimateDrift } from "../../src/shared/drift.js";
 import type { ProjectFile } from "../../src/shared/project.js";
 import { issueToken } from "../../src/server/tokens.js";
@@ -53,6 +57,29 @@ describe("conform filters", () => {
     expect(filter).toContain("fps=30");
     expect(filter).toContain("tpad=start_duration=1.000000");
     expect(filter).toContain("+0.000000/TB");
+  });
+});
+
+describe.runIf(hasFfmpeg())("end of a conformed video", () => {
+  const run = promisify(execFile);
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "conform-end-"));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("counts the empty start of a proxy whose first frame rounds up to the second slot of the frame grid", async () => {
+    // 7.2 s of video that starts 21.3 ms into the timeline: its first frame is placed at 33 ms, the mp4 starts there
+    const source = path.join(dir, "in.mkv");
+    const proxy = path.join(dir, "proxy.mp4");
+    await run("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x90:rate=25:duration=7.2", "-c:v", "libx264", source]);
+    await run("ffmpeg", ["-v", "error", "-y", "-i", source, "-an", "-vf", videoProxyFilter({ rate: 1, offsetMs: 21.3 }, 30), "-c:v", "libx264", "-f", "mp4", proxy]);
+    const { stdout } = await run("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", proxy]);
+    const end = await timelineEndOf("ffprobe", proxy);
+    expect(end - Number(stdout.trim())).toBeGreaterThan(0.03); // the duration alone leaves out the empty frame slot
+    expect(Math.abs(end - (21.3 / 1000 + 7.2))).toBeLessThanOrEqual(2 / 30);
   });
 });
 
