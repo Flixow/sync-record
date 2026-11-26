@@ -156,13 +156,6 @@ export class Collector {
     return { claimToken, expiresAtMs };
   }
 
-  async hostClaimToken(sid: string): Promise<ClaimLinkResponse> {
-    const runtime = await this.load(sid);
-    const host = runtime.record.participants.find((participant) => participant.host);
-    if (!host) throw new HttpError(404, "host_not_found");
-    return this.claimToken(sid, host.id);
-  }
-
   async redeemClaim(sid: string, claim: TokenClaims): Promise<ClaimResponse> {
     const runtime = await this.load(sid);
     const host = claim.pid ? runtime.record.participants.find((participant) => participant.id === claim.pid) : undefined;
