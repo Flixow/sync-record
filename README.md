@@ -107,6 +107,7 @@ Everything is read from the environment (see `.env.example`). Nothing is hardcod
 | `LLM_PROVIDER` | `openai-compatible` | `openai-compatible` (llama.cpp, Ollama, LiteLLM, OpenRouter, OpenAI, any server with `/v1/chat/completions`; key optional) or `omp-gateway` (an OMP auth gateway; key and model required). |
 | `LLM_MODEL` | `default` | Model name sent to the endpoint. Required for `omp-gateway` (`provider/model-id`). |
 | `LLM_API_KEY`, `LLM_API_KEY_FILE` | empty | Bearer key for the endpoint, from the environment or from a file (use the file with Docker/Kubernetes secrets); set at most one. Refused over plain `http://` unless the host is this machine, Docker's `host.docker.internal` or a Tailscale address. |
+| `POSTHOG_KEY`, `POSTHOG_HOST` | empty | Optional telemetry to a PostHog instance you operate. Off unless both are set; see [Telemetry](#telemetry). |
 | `LLM_TIMEOUT_MS` | `60000` | Per-request timeout, 1000 to 600000. A timeout counts as a failure: the built-in rules answer instead. |
 | `WEB_DIR` | `./dist/web` | Built web client. |
 
@@ -286,6 +287,30 @@ credential the broker holds. Using a chat subscription this way is the operator'
 terms do not allow routing subscription credentials through third-party applications, and OpenAI limits subscription use
 to its participating apps. It is meant for a private, single-operator installation; anyone else should use their own API
 keys with `openai-compatible`.
+
+## Telemetry
+
+Off by default. Nothing is sent, no connection is opened and the build contains no key or host unless the operator sets both
+`POSTHOG_KEY` and `POSTHOG_HOST` (an `https://` origin; `http://` only for localhost) in the server's environment. The
+repository, the web bundle and the Docker image carry neither; the browser never talks to PostHog (there is no PostHog SDK
+in the web app, so there is no autocapture, no session recording and no page-view tracking).
+
+When enabled, the server sends exactly these events, each as one request to `POSTHOG_HOST/capture/`, fire-and-forget with a
+3 s timeout:
+
+| Event | Properties |
+| --- | --- |
+| `server_started` | `version` of the program |
+| `session_created` | none |
+| `session_ended` | `participants` (a number) |
+| `job_failed` | `kind` of the post-production job (for example `transcribe`) |
+| `server_error` | `error`: class name of an unexpected request error, not its message |
+
+Every event also carries a random id generated at each server start (it identifies no person and no recording),
+`$process_person_profile: false` and `$geoip_disable: true`. Never sent: audio, video, frames, transcripts, names, emails,
+session or participant ids, file names, paths, error messages, IP addresses of participants (the server's own address is
+what PostHog sees, so also switch on "Discard client IP data" in the PostHog project). The set of events is a closed list in
+`src/server/telemetry.ts`; adding one is a code change.
 
 ## How it works
 

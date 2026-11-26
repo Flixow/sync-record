@@ -55,6 +55,8 @@ export class JobRunner {
   private readonly lastWrite = new Map<string, number>();
   private readonly writes = new Map<string, Promise<void>>();
   private closed = false;
+  /** Called once when a job ends as failed (the telemetry hook; only the job kind is passed on). */
+  onFailed: ((job: Pick<JobRecord, "kind">) => void) | null = null;
 
   constructor(
     private readonly config: PostConfig,
@@ -235,6 +237,7 @@ export class JobRunner {
         } else {
           job.status = "failed";
           job.error = error instanceof Error ? error.message.slice(0, 500) : "job failed";
+          this.onFailed?.(job);
         }
       }
       job.pid = null;

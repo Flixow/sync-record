@@ -1,5 +1,6 @@
 import path from "node:path";
 import { readFileSync } from "node:fs";
+import { telemetryOrigin, type TelemetrySettings } from "./telemetry.js";
 import { DEFAULT_LLM_TIMEOUT_MS, LLM_PROVIDER_NAMES, llmTransport, type LlmProviderName, type LlmSettings } from "./post/llm.js";
 
 export type StorageDriverName = "local" | "s3";
@@ -27,6 +28,8 @@ export interface Config {
   ffprobePath: string;
   webDir: string;
   version: string;
+  /** Optional telemetry; null (off) unless POSTHOG_KEY and POSTHOG_HOST are both set. */
+  telemetry: TelemetrySettings | null;
   post: PostConfig;
 }
 
@@ -123,6 +126,16 @@ function loadLlm(env: Env): LlmSettings | null {
 }
 
 /** Reads the whole configuration from environment variables. Throws a readable error when it is unusable. */
+/** Both variables or neither; a host that is not https (or this machine) is a configuration error, not a silent off. */
+function loadTelemetry(env: Env): TelemetrySettings | null {
+  const key = text(env, "POSTHOG_KEY");
+  const host = text(env, "POSTHOG_HOST");
+  if (key === undefined || host === undefined) return null;
+  const origin = telemetryOrigin(host);
+  if (origin === null) throw new Error("POSTHOG_HOST must be an https:// origin (http only for localhost)");
+  return { key, host: origin };
+}
+
 export function loadConfig(env: Env = process.env): Config {
   const tokenSecret = text(env, "TOKEN_SIGNING_SECRET");
   if (!tokenSecret || tokenSecret.length < 16) {
@@ -173,6 +186,7 @@ export function loadConfig(env: Env = process.env): Config {
     ffprobePath: text(env, "FFPROBE_PATH") ?? "ffprobe",
     webDir: path.resolve(text(env, "WEB_DIR") ?? "./dist/web"),
     version: text(env, "APP_VERSION") ?? "0.1.0",
+    telemetry: loadTelemetry(env),
     post: {
       dir: postDir,
       concurrency: integer(env, "POST_CONCURRENCY", 1, 1, 8),
