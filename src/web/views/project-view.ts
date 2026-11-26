@@ -202,7 +202,7 @@ export function projectView(api: ProjectApi): { el: HTMLElement; dispose: () => 
       try {
         const file = await api.scenes();
         if (disposed || layKey !== key || stg !== mine || !state) return;
-        layPanel = layoutPanel(api, mine, state.project, file);
+        layPanel = layoutPanel(api, mine, state.project, file, state.settings);
         setChildren(layHost, layPanel.el);
       } catch (error) {
         setChildren(layHost, banner("error", errorText(error), "pj-lay-error"));

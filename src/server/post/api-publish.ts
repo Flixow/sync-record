@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { chaptersForYoutube, formatChapters, validateChapters } from "../../shared/chapters.js";
+import { chaptersForYoutube, formatChapters, validateChapters, wordsThroughEdl } from "../../shared/chapters.js";
 import { adjustRange, DEFAULT_CLIP_LIMIT, suggestClips, type ClipProject } from "../../shared/clips.js";
 import { presetById } from "../../shared/presets.js";
 import type { ProjectFile } from "../../shared/project.js";
@@ -12,7 +12,7 @@ import * as v from "../validate.js";
 import { readEdl } from "./edl-store.js";
 import type { Http } from "./api.js";
 import type { PostProduction } from "./index.js";
-import { createLlmClient, llmDraft, rerankWithLlm } from "./llm.js";
+import { createLlmClient, llmChapterTitles, llmDraft, rerankWithLlm } from "./llm.js";
 import { writeJson } from "./projects.js";
 import { TRANSCRIPT_FILE } from "./transcribe.js";
 
@@ -49,7 +49,7 @@ function saveClips(dir: string, baseRev: number, clips: ClipProject[]): Promise<
   return work;
 }
 
-async function transcriptOf(post: PostProduction, sid: string): Promise<TranscriptFile> {
+export async function transcriptOf(post: PostProduction, sid: string): Promise<TranscriptFile> {
   try {
     return JSON.parse(await readFile(path.join(post.store.dir(sid), TRANSCRIPT_FILE), "utf8")) as TranscriptFile;
   } catch {
@@ -58,7 +58,7 @@ async function transcriptOf(post: PostProduction, sid: string): Promise<Transcri
 }
 
 /** Level tracks of every participant's microphone, by participant id. */
-async function speakerLevels(project: ProjectFile, dir: string): Promise<{ pid: string; levels: Int8Array }[]> {
+export async function speakerLevels(project: ProjectFile, dir: string): Promise<{ pid: string; levels: Int8Array }[]> {
   const out: { pid: string; levels: Int8Array }[] = [];
   for (const participant of project.participants) {
     const own = project.sources.filter((source) => source.participantId === participant.id && source.audio);
@@ -70,7 +70,7 @@ async function speakerLevels(project: ProjectFile, dir: string): Promise<{ pid: 
   return out;
 }
 
-const languageOf = (transcript: TranscriptFile): "en" | "pl" => (transcript.lang === "pl" ? "pl" : "en");
+export const languageOf = (transcript: TranscriptFile): "en" | "pl" => (transcript.lang === "pl" ? "pl" : "en");
 
 function parseClips(value: unknown, sid: string, durationMs: number): ClipProject[] {
   if (!Array.isArray(value) || value.length > MAX_CLIPS) throw new HttpError(400, "invalid_field", { field: "clips" });
@@ -116,7 +116,7 @@ export async function handlePublishRoutes(post: PostProduction, sid: string, res
     const reranked = llm.enabled ? await rerankWithLlm(suggestions, transcript.words, llm) : suggestions;
     const llmUsed = llm.enabled && reranked !== suggestions;
     suggestions = reranked;
-    http.json(res, 200, { suggestions, llmUsed, llmAvailable: post.config.post.llm !== null });
+    http.json(res, 200, { suggestions, llmUsed, llmAvailable: post.config.post.llm !== null, llmFailure: llmUsed ? null : (llm.lastFailure ?? null) });
     return true;
   }
   if (rest[0] === "clips" && rest[1] === "adjust" && rest.length === 2 && method === "POST") {
@@ -141,13 +141,17 @@ export async function handlePublishRoutes(post: PostProduction, sid: string, res
     const body = await http.readJson(req);
     const transcript = await transcriptOf(post, sid);
     const edl = await readEdl(dir);
-    const chapters = chaptersForYoutube(transcript.words, project.durationMs, edl);
+    const baseChapters = chaptersForYoutube(transcript.words, project.durationMs, edl);
     const language = body.language === "pl" || body.language === "en" ? body.language : languageOf(transcript);
     const names = new Map(project.participants.map((p) => [p.id, p.name]));
-    const input = { words: transcript.words, chapters, speakers: transcript.speakers.map((s) => names.get(s.pid) ?? s.name), language, ...(typeof body.name === "string" && body.name.trim() ? { name: body.name.trim().slice(0, 120) } : {}) } as const;
     const llm = createLlmClient(body.llm === true ? post.config.post.llm : null);
+    // the model only retitles the chapters (times and count stay), then writes the titles and summary around them
+    const retitled = llm.enabled ? await llmChapterTitles(llm, baseChapters, wordsThroughEdl(transcript.words, edl), language) : null;
+    const chapters = retitled ?? baseChapters;
+    const input = { words: transcript.words, chapters, speakers: transcript.speakers.map((s) => names.get(s.pid) ?? s.name), language, ...(typeof body.name === "string" && body.name.trim() ? { name: body.name.trim().slice(0, 120) } : {}) } as const;
     const improved = llm.enabled ? await llmDraft(llm, input) : null;
-    http.json(res, 200, { draft: improved ?? draftTitleAndDescription(input), llmUsed: improved !== null, llmAvailable: post.config.post.llm !== null, chapters, validation: validateChapters(chapters, project.durationMs - edl.removed.reduce((sum, range) => sum + range.e - range.s, 0)) });
+    const llmUsed = improved !== null || retitled !== null;
+    http.json(res, 200, { draft: improved ?? draftTitleAndDescription(input), llmUsed, llmAvailable: post.config.post.llm !== null, llmFailure: llmUsed ? null : (llm.lastFailure ?? null), chapters, validation: validateChapters(chapters, project.durationMs - edl.removed.reduce((sum, range) => sum + range.e - range.s, 0)) });
     return true;
   }
   if (rest[0] === "thumbnails" && rest.length === 1 && method === "GET") {

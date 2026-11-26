@@ -1,4 +1,4 @@
-import { MIN_CHAPTERS, type ChapterIssue } from "../../shared/chapters.js";
+import { formatChapters, MIN_CHAPTERS, type ChapterIssue } from "../../shared/chapters.js";
 import type { JobRecord } from "../../shared/project.js";
 import type { ThumbnailKind } from "../../shared/publish.js";
 import { copyField } from "../lib/clipboard.js";
@@ -135,6 +135,7 @@ export function publishPanel(api: ProjectApi, hooks: PublishPanelHooks): Publish
   const llmToggle = h("input", { type: "checkbox", "data-testid": "pj-pub-llm" });
   const draftButton = h("button", { type: "button", class: "btn btn-primary", "data-testid": "pj-pub-draft", disabled: true, onclick: () => makeDraft() }, t("pj.pub.draft.make"));
   const draftHost = h("div", { class: "stack", "data-testid": "pj-pub-draft-result" });
+  const llmHint = h("span", { class: "hint ex-hint", "data-testid": "pj-pub-llm-hint" }, t("pj.pub.llm.hint"));
 
   function makeDraft(): void {
     drafting = true;
@@ -144,9 +145,12 @@ export function publishPanel(api: ProjectApi, hooks: PublishPanelHooks): Publish
       try {
         draftWithModel = llmToggle.checked;
         draft = await api.publishDraft(draftWithModel);
+        // chapters the model retitled replace the list shown above, so the list and the description agree
+        if (draft.llmUsed && chapters) chapters = { chapters: draft.chapters, validation: draft.validation, text: formatChapters(draft.chapters) };
       } finally {
         drafting = false;
         if (!disposed) {
+          renderChapters();
           draftButton.disabled = !ready;
           renderDraft();
         }
@@ -330,6 +334,7 @@ export function publishPanel(api: ProjectApi, hooks: PublishPanelHooks): Publish
     noPicture.hidden = picture;
     thumbControls.hidden = !picture;
     if (!initialised) {
+      llmHint.textContent = t(next.settings.llmRemote ? "pj.pub.llm.hint.remote" : "pj.pub.llm.hint");
       initialised = true;
       // the list is only needed for the picture of the latest thumbnail; a failed read leaves it empty
       void loadExports().catch(() => undefined);
@@ -367,7 +372,7 @@ export function publishPanel(api: ProjectApi, hooks: PublishPanelHooks): Publish
       "div",
       { class: "ex-block", "data-testid": "pj-pub-draft-block" },
       h("h4", {}, t("pj.pub.draft")),
-      h("div", { class: "row" }, draftButton, h("label", { class: "check" }, llmToggle, h("span", {}, t("pj.pub.llm"), h("span", { class: "hint ex-hint" }, t("pj.pub.llm.hint"))))),
+      h("div", { class: "row" }, draftButton, h("label", { class: "check" }, llmToggle, h("span", {}, t("pj.pub.llm"), llmHint))),
       draftHost,
     ),
     h("div", { class: "ex-block", "data-testid": "pj-pub-thumb-block" }, h("h4", {}, t("pj.pub.thumb")), noPicture, thumbControls),

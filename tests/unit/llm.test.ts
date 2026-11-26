@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { chaptersForYoutube } from "../../src/shared/chapters.js";
 import { suggestClips, type ClipSuggestion } from "../../src/shared/clips.js";
 import { draftTitleAndDescription } from "../../src/shared/publish.js";
-import { createLlmClient, HttpLlmClient, llmDraft, rerankClips, rerankWithLlm, type LlmClient } from "../../src/server/post/llm.js";
+import { createLlmClient, HttpLlmClient, llmChapterTitles, llmDraft, llmTransport, rerankClips, rerankWithLlm, type LlmClient } from "../../src/server/post/llm.js";
 import { script, SPEAKERS, type Line } from "../support/talk.js";
 
 const { A, B } = SPEAKERS;
@@ -13,6 +13,7 @@ interface Seen {
   method: string | undefined;
   url: string | undefined;
   contentType: string | undefined;
+  headers: IncomingMessage["headers"];
   body: string;
 }
 
@@ -38,7 +39,7 @@ async function fake(answer: (request: Seen, response: ServerResponse) => void): 
     const chunks: Buffer[] = [];
     request.on("data", (chunk: Buffer) => chunks.push(chunk));
     request.on("end", () => {
-      const entry: Seen = { method: request.method, url: request.url, contentType: request.headers["content-type"], body: Buffer.concat(chunks).toString("utf8") };
+      const entry: Seen = { method: request.method, url: request.url, contentType: request.headers["content-type"], headers: request.headers, body: Buffer.concat(chunks).toString("utf8") };
       seen.push(entry);
       answer(entry, response);
     });
@@ -145,16 +146,16 @@ describe("the chat-completions client", () => {
 
   it("gives up after the timeout when the server never answers", async () => {
     const server = await fake(() => undefined);
-    const slow = new HttpLlmClient({ url: server.url, model: "m", timeoutMs: 150 });
+    const slow = new HttpLlmClient({ url: server.url, model: "m", timeoutMs: 150, provider: "openai-compatible", apiKey: null });
     const started = performance.now();
     expect(await slow.rank({ system: "s", user: "u" })).toBeNull();
     expect(performance.now() - started).toBeLessThan(1500);
   });
 
-  it("uses a 30 s timeout unless told otherwise", () => {
+  it("uses a 60 s timeout unless told otherwise", () => {
     const spy = vi.spyOn(AbortSignal, "timeout");
     void createLlmClient({ url: "http://127.0.0.1:1" }).rank({ system: "s", user: "u" });
-    expect(spy).toHaveBeenCalledWith(30_000);
+    expect(spy).toHaveBeenCalledWith(60_000);
   });
 });
 
@@ -258,5 +259,122 @@ describe("drafting titles", () => {
     }
     const throwing: LlmClient = { enabled: true, rank: () => Promise.reject(new Error("boom")) };
     expect(await llmDraft(throwing, input)).toBeNull();
+  });
+});
+
+describe("providers and credentials", () => {
+  const gateway = (url: string, apiKey: string | null = "gw-test-token"): LlmClient => createLlmClient({ url, model: "anthropic/test-model", timeoutMs, provider: "omp-gateway", apiKey });
+  const headersOf = (request: Seen): Seen["headers"] => request.headers;
+
+  it("sends the key as a bearer token and nothing else as a credential", async () => {
+    const server = await fake(completion({ ok: true }));
+    expect(await createLlmClient({ url: server.url, model: "m", timeoutMs, apiKey: "sk-test-123" }).rank({ system: "s", user: "u" })).toEqual({ ok: true });
+    expect(headersOf(server.seen[0] as Seen).authorization).toBe("Bearer sk-test-123");
+    expect(headersOf(server.seen[0] as Seen)["x-omp-app"]).toBeUndefined();
+    await client(server.url).rank({ system: "s", user: "u" });
+    expect(headersOf(server.seen[1] as Seen).authorization).toBeUndefined();
+  });
+
+  it("speaks the gateway dialect: bearer, an app name and no json_object mode, which the provider behind it lacks", async () => {
+    const server = await fake(completion('```json\n{"via":"gateway"}\n```'));
+    const llm = gateway(server.url);
+    expect(llm.enabled).toBe(true);
+    expect(await llm.rank({ system: "s", user: "u" })).toEqual({ via: "gateway" });
+    const [request] = server.seen as [Seen];
+    expect(request.url).toBe("/v1/chat/completions");
+    expect(headersOf(request).authorization).toBe("Bearer gw-test-token");
+    expect(headersOf(request)["x-omp-app"]).toBe("syncrecord");
+    const body = JSON.parse(request.body) as Record<string, unknown>;
+    expect(body.model).toBe("anthropic/test-model");
+    expect(body).not.toHaveProperty("response_format");
+  });
+
+  it("is off without a token for the gateway and makes no request", async () => {
+    const spy = vi.spyOn(globalThis, "fetch");
+    const llm = gateway("http://127.0.0.1:1", null);
+    expect(llm.enabled).toBe(false);
+    expect(await llm.rank({ system: "s", user: "u" })).toBeNull();
+    expect(llm.lastFailure).toBe("disabled");
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("never follows a redirect, so the token cannot be sent to another host", async () => {
+    const elsewhere = await fake(completion({ stolen: true }));
+    const redirecting = await fake((_request, response) => {
+      response.statusCode = 307;
+      response.setHeader("location", `${elsewhere.url}/v1/chat/completions`);
+      response.end();
+    });
+    expect(await gateway(redirecting.url).rank({ system: "s", user: "u" })).toBeNull();
+    expect(elsewhere.seen).toHaveLength(0);
+  });
+
+  it("names why a call failed with a short code and never keeps the response body", async () => {
+    const cases: [string, (request: Seen, response: ServerResponse) => void][] = [
+      ["http_401", (_request, response) => { response.statusCode = 401; response.end("secret-detail gw-test-token"); }],
+      ["http_429", (_request, response) => { response.statusCode = 429; response.end("{}"); }],
+      ["bad_shape", completion(undefined)],
+      ["not_json", (_request, response) => { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ choices: [{ message: { content: "not json at all" } }] })); }],
+    ];
+    for (const [code, answer] of cases) {
+      const llm = gateway((await fake(answer)).url);
+      expect(await llm.rank({ system: "s", user: "u" }), code).toBeNull();
+      expect(llm.lastFailure, code).toBe(code);
+    }
+    const timeout = new HttpLlmClient({ url: (await fake(() => undefined)).url, model: "m", timeoutMs: 100, provider: "omp-gateway", apiKey: "k" });
+    expect(await timeout.rank({ system: "s", user: "u" })).toBeNull();
+    expect(timeout.lastFailure).toBe("timeout");
+    const ok = gateway((await fake(completion({ a: 1 }))).url);
+    await ok.rank({ system: "s", user: "u" });
+    expect(ok.lastFailure).toBeNull();
+  });
+
+  it("tells a service on this machine from one that is not, and a protected path from a clear one", () => {
+    const cases: [string, { local: boolean; protectedPath: boolean } | null][] = [
+      ["http://127.0.0.1:8080", { local: true, protectedPath: true }],
+      ["http://localhost:4000/v1", { local: true, protectedPath: true }],
+      ["http://[::1]:4000", { local: true, protectedPath: true }],
+      ["http://host.docker.internal:4000", { local: true, protectedPath: true }],
+      ["https://api.example.com", { local: false, protectedPath: true }],
+      ["http://100.64.0.1:4000", { local: false, protectedPath: true }],
+      ["http://100.127.255.254:4000", { local: false, protectedPath: true }],
+      ["http://100.128.0.1:4000", { local: false, protectedPath: false }],
+      ["http://broker.tail1234.ts.net:4000", { local: false, protectedPath: true }],
+      ["http://192.168.1.10:4000", { local: false, protectedPath: false }],
+      ["ftp://127.0.0.1", null],
+      ["not a url", null],
+    ];
+    for (const [url, expected] of cases) expect(llmTransport(url), url).toEqual(expected);
+  });
+});
+
+describe("chapter titles", () => {
+  const chapters = chaptersForYoutube(words, endMs);
+
+  it("keeps the start times and the count, takes the model's titles and sends the text of each chapter", async () => {
+    expect(chapters.length).toBeGreaterThanOrEqual(3);
+    const titles = chapters.map((_, index) => `  Topic ${index + 1}\n${"x".repeat(index === 0 ? 120 : 0)}`);
+    const server = await fake(completion({ titles }));
+    const result = await llmChapterTitles(client(server.url), chapters, words, "en");
+    expect(result?.map((chapter) => chapter.startMs)).toEqual(chapters.map((chapter) => chapter.startMs));
+    expect(result?.[1]?.title).toBe("Topic 2");
+    expect((result?.[0]?.title.length ?? 99)).toBeLessThanOrEqual(60);
+    const sent = JSON.parse((server.seen[0] as Seen).body) as { messages: { content: string }[] };
+    expect(sent.messages[1]?.content).toContain("### Chapter 1");
+    expect(sent.messages[1]?.content).toContain(`### Chapter ${chapters.length}`);
+  });
+
+  it("returns null for the wrong number of titles, non-strings, no change and a model that is off", async () => {
+    const bad: unknown[] = [{ titles: ["only one"] }, { titles: chapters.map(() => 1) }, { titles: "x" }, {}, { titles: chapters.map((chapter) => chapter.title) }];
+    for (const answer of bad) expect(await llmChapterTitles(client((await fake(completion(answer))).url), chapters, words, "en"), JSON.stringify(answer)).toBeNull();
+    expect(await llmChapterTitles(client(null), chapters, words, "en")).toBeNull();
+  });
+
+  it("keeps a chapter's own title where the model gave an empty one", async () => {
+    const server = await fake(completion({ titles: chapters.map((_, index) => (index === 1 ? "   " : `New ${index}`)) }));
+    const result = await llmChapterTitles(client(server.url), chapters, words, "pl");
+    expect(result?.[1]?.title).toBe(chapters[1]?.title);
+    expect(result?.[2]?.title).toBe("New 2");
+    expect((JSON.parse((server.seen[0] as Seen).body) as { messages: { content: string }[] }).messages[0]?.content).toContain("Polish");
   });
 });

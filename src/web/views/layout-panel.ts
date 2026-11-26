@@ -1,12 +1,15 @@
 import { LAYOUT_IDS, type Aspect, type Background, type Fit, type LayoutId } from "../../shared/layout.js";
 import type { ProjectFile } from "../../shared/project.js";
+import { REASON_TEXT } from "../../shared/clips.js";
+import type { Span } from "../../shared/scene-plan.js";
 import type { Rhythm, Scene } from "../../shared/scenes.js";
 import { h, setChildren } from "../lib/dom.js";
 import { historyKey } from "../lib/keys.js";
-import type { ProjectApi, ScenesFile } from "../lib/project-api.js";
+import { ApiError } from "../lib/api.js";
+import type { ProjectApi, ProjectState, ScenesFile } from "../lib/project-api.js";
 import { SceneState } from "../lib/scene-state.js";
 import { formatClock } from "../lib/time.js";
-import { t, type MessageKey } from "../i18n/index.js";
+import { getLang, t, type MessageKey } from "../i18n/index.js";
 import { banner } from "./layout.js";
 import { layoutPreview, type PreviewSource } from "./layout-preview.js";
 import type { Stage } from "./stage.js";
@@ -52,7 +55,7 @@ const option = (value: string, label: string, selected: boolean): HTMLOptionElem
  * automatic scenes, a list of the scenes with a manual override per scene, and the live preview that goes into the
  * player above. The scene plan has its own undo history and its own save, like the cut list.
  */
-export function layoutPanel(api: ProjectApi, stg: Stage, project: ProjectFile, file: ScenesFile): LayoutPanel {
+export function layoutPanel(api: ProjectApi, stg: Stage, project: ProjectFile, file: ScenesFile, settings: ProjectState["settings"]): LayoutPanel {
   const state = new SceneState(api, file);
 
   // ---- the preview, above the player ---------------------------------------------------------------------------------
@@ -273,6 +276,55 @@ export function layoutPanel(api: ProjectApi, stg: Stage, project: ProjectFile, f
   const onLeave = (): void => state.saveOnLeave();
   window.addEventListener("pagehide", onLeave);
 
+  // ---- a suggested plan -------------------------------------------------------------------------------------------------
+  let gone = false;
+  const sugLlm = h("input", { type: "checkbox", "data-testid": "pj-lay-suggest-llm" });
+  const sugButton = h("button", { type: "button", class: "btn btn-small", "data-testid": "pj-lay-suggest", onclick: () => void suggest() }, t("pj.lay.sug"));
+  const sugHost = h("div", { class: "stack", "data-testid": "pj-lay-suggest-result" });
+
+  const spanList = (title: MessageKey, spans: Span[], fromModel: boolean): HTMLElement | null =>
+    spans.length === 0
+      ? null
+      : h(
+          "div",
+          {},
+          h("h5", {}, t(title)),
+          h(
+            "ul",
+            { class: "clip-reasons" },
+            ...spans.map((span) =>
+              h(
+                "li",
+                { "data-reason": fromModel ? "model" : span.reason },
+                h("button", { type: "button", class: "link-button", title: t("pj.lay.seek"), onclick: () => stg.seek(span.s) }, `${formatClock(span.s)}–${formatClock(span.e)}`),
+                ` ${fromModel ? span.reason : (REASON_TEXT[span.reason]?.[getLang()] ?? (span.reason === "silence" ? t("pj.lay.sug.reason.silence") : span.reason))}`,
+              ),
+            ),
+          ),
+        );
+
+  async function suggest(): Promise<void> {
+    sugButton.disabled = true;
+    const wantModel = sugLlm.checked;
+    try {
+      const result = await api.suggestScenePlan(wantModel);
+      if (gone) return;
+      const fromModel = result.source === "llm";
+      // the layouts go onto the editor's own plan in one undoable step; the lists are advisory
+      state.addOverrides(result.overrides);
+      const status = fromModel
+        ? banner("info", result.overrides.length > 0 ? t("pj.lay.sug.applied", { count: result.overrides.length }) : t("pj.lay.sug.same"), "pj-lay-suggest-note")
+        : banner(wantModel ? "warn" : "info", wantModel ? t(result.llmAvailable ? "pj.lay.sug.failed" : "pj.lay.sug.unavailable") : t("pj.lay.sug.rules"), "pj-lay-suggest-note");
+      status.setAttribute("data-state", fromModel ? "used" : wantModel ? (result.llmAvailable ? "failed" : "unavailable") : "rules");
+      const lists = [spanList("pj.lay.sug.highlights", result.highlights, fromModel), spanList("pj.lay.sug.cuts", result.cuts, fromModel)];
+      setChildren(sugHost, status, ...(lists.every((list) => list === null) ? [h("p", { class: "hint" }, t("pj.lay.sug.none"))] : lists));
+    } catch (error) {
+      if (!gone) setChildren(sugHost, banner("error", error instanceof ApiError && error.code === "transcript_missing" ? t("pj.cl.needTranscript") : t("err.generic", { message: error instanceof Error ? error.message : "?" }), "pj-lay-suggest-error"));
+    } finally {
+      if (!gone) sugButton.disabled = false;
+    }
+  }
+
   const needsProxies = sources.some((source) => source.video === null);
   const el = h(
     "div",
@@ -291,6 +343,8 @@ export function layoutPanel(api: ProjectApi, stg: Stage, project: ProjectFile, f
       field(t("pj.lay.fallback"), fallbackSelect),
     ),
     h("div", { class: "row editor-toolbar" }, undoButton, redoButton, clearButton, saveStatus),
+    h("div", { class: "row", "data-testid": "pj-lay-suggest-row" }, sugButton, h("label", { class: "check" }, sugLlm, h("span", {}, t("pj.lay.sug.llm"), h("span", { class: "hint ex-hint" }, t(settings.llmRemote ? "pj.lay.sug.hint.remote" : "pj.lay.sug.hint"))))),
+    sugHost,
     conflictHost,
     h("h4", {}, t("pj.lay.scenes")),
     summary,
@@ -313,6 +367,7 @@ export function layoutPanel(api: ProjectApi, stg: Stage, project: ProjectFile, f
     el,
     flush: () => state.flush(),
     dispose() {
+      gone = true;
       unsubscribe();
       stopFollowing();
       window.removeEventListener("pagehide", onLeave);
