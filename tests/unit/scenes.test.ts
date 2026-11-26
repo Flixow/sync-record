@@ -243,6 +243,24 @@ describe("planScenes: active speaker", () => {
     expect(planScenes([tracks[0] as ActivityTrack], duration, params())).toEqual([{ s: 0, e: duration, layout: "solo", sources: ["screen"] }]);
   });
 
+  it("features the screen only while it is shared and follows the speaker before and after", () => {
+    const duration = 60_000;
+    const people = conversation([[0, 1000, 12_000], [1, 14_000, 26_000], [0, 28_000, 40_000], [1, 42_000, 58_000]], duration);
+    const screen: ActivityTrack = { id: "screen", kind: "screen", levels: new Int8Array(0), range: { s: 13_000, e: 41_000 } };
+    const scenes = planScenes([screen, ...people], duration, params());
+    expectTiling(scenes, duration, "partial share");
+    const during = scenes.filter((scene) => scene.s >= 13_000 && scene.e <= 41_000);
+    expect(during.length).toBeGreaterThan(0);
+    expect(during.every((scene) => scene.layout === "screen-camera" && scene.sources[0] === "screen")).toBe(true);
+    const outside = scenes.filter((scene) => scene.e <= 13_000 || scene.s >= 41_000);
+    expect(outside.every((scene) => scene.layout === "solo" && !scene.sources.includes("screen"))).toBe(true);
+    expect(scenes[0]?.sources[0]).toBe("cam0");
+    expect(scenes[scenes.length - 1]?.sources[0]).toBe("cam1");
+    // a share that starts or ends within a second of the edges covers the recording as if it had no range
+    const edge: ActivityTrack = { ...screen, range: { s: 300, e: duration - 150 } };
+    expect(planScenes([edge, ...people], duration, params())).toEqual(planScenes([{ id: "screen", kind: "screen", levels: new Int8Array(0) }, ...people], duration, params()));
+  });
+
   it("does not take the screen's own audio for a speaker", () => {
     const duration = 30_000;
     const loudScreen: ActivityTrack = { id: "screen", kind: "screen", levels: new Int8Array(duration / FRAME).fill(-10) };

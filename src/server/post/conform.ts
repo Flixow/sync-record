@@ -33,7 +33,9 @@ export async function timelineEndOf(ffprobePath: string, file: string): Promise<
 
 /** The audio filter that puts a source on the project timeline: drift correction, start offset, padding to the project length. */
 export function audioConformFilter(source: Pick<ProjectSource, "rate" | "driftApplied" | "offsetMs">, projectDurationSec: number): string {
-  const chain: string[] = [];
+  // Browsers drop an audio packet now and then: the file's timestamps then run ahead of its samples. Filling the gaps
+  // with silence keeps the samples on the clock, so the padding and the trim below land on the project length.
+  const chain: string[] = ["asetpts=PTS-STARTPTS", "aresample=async=1000:first_pts=0"];
   if (source.driftApplied) {
     chain.push(`aresample=${DRIFT_PIVOT_RATE}`, `asetrate=${Math.round(DRIFT_PIVOT_RATE * source.rate)}`, `aresample=${CONFORM_SAMPLE_RATE}`);
   }

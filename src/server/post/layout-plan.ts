@@ -23,7 +23,7 @@ export async function activityTracks(project: ProjectFile, dir: string): Promise
   for (const source of layoutSources(project)) {
     const owner = project.sources.find((item) => item.id === source.id) as ProjectSource;
     if (source.kind === "screen") {
-      out.push({ id: source.id, levels: new Int8Array(0), kind: "screen" });
+      out.push({ id: source.id, levels: new Int8Array(0), kind: "screen", range: { s: owner.offsetMs, e: owner.offsetMs + owner.timelineDurationMs } });
       continue;
     }
     const mic = microphoneOf(project, owner.participantId);

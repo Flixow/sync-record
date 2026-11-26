@@ -21,6 +21,8 @@ export interface ActivityTrack {
   levels: Int8Array;
   /** Default "camera". */
   kind?: "camera" | "screen";
+  /** A screen only: the stretch of the project timeline (ms) in which it is shared. Absent = shared for the whole recording. */
+  range?: { s: number; e: number };
   /** Speech flags per frame when already computed; otherwise they are computed from `levels` and the other tracks' levels. */
   speech?: Uint8Array;
 }
@@ -61,6 +63,8 @@ const CROSSTALK_MS = 1500;
 const LEAD_IN_MS = 150;
 /** Half-width in frames of the window over which two voices' loudness is compared. */
 const COMPARE_HALF_WINDOW = 2;
+/** A screen share this close to the start or end of the recording is treated as covering it. */
+const SHARE_EDGE_MS = 1000;
 
 export interface Scene {
   /** ms on the project timeline; the scenes of a list tile [0, duration] without gaps. */
@@ -261,8 +265,9 @@ function mergeScenes(scenes: Scene[]): Scene[] {
  *  3. "nobody" and "several at once" become a wide scene or hold the last speaker (`fallback`);
  *  4. the shortest scene below the dwell (`effectiveMinDwellMs`) joins its longer neighbour, until none is left.
  * The scene list covers [0, durationMs] with no gaps or overlaps, is deterministic, and no scene is shorter than the
- * dwell unless the whole recording is. With a screen track the layout is always screen-camera with the screen first
- * and only the camera beside it follows the speaker; when no switching can change the picture (one camera, side by
+ * dwell unless the whole recording is. While a screen is shared (a screen track without `range`: the whole recording;
+ * with `range`: that stretch) the layout is screen-camera with the screen first and only the camera beside it follows the
+ * speaker, and outside a `range` the cameras follow the speaker on their own; when no switching can change the picture (one camera, side by
  * side, grid) the result is a single scene.
  */
 export function planScenes(tracks: ActivityTrack[], durationMs: number, params: SceneParams, vad: VadOptions = DEFAULT_VAD): Scene[] {
@@ -270,6 +275,18 @@ export function planScenes(tracks: ActivityTrack[], durationMs: number, params: 
   const screens = tracks.filter((track) => track.kind === "screen");
   const cameras = tracks.filter((track) => track.kind !== "screen");
   const withScreen = screens.length > 0 && cameras.length > 0;
+  const share = screens[0]?.range;
+  // A share that starts or ends within a second of the recording's edge counts as reaching it (tracks start a few hundred ms apart).
+  const s = share && share.s <= SHARE_EDGE_MS ? 0 : Math.max(0, share?.s ?? 0);
+  const e = share && share.e >= durationMs - SHARE_EDGE_MS ? durationMs : Math.min(durationMs, share?.e ?? durationMs);
+  if (withScreen && share && (s > 0 || e < durationMs)) {
+    // The screen is shared for a part of the recording: the screen layout there, the speaker-led plan of the cameras elsewhere.
+    const cameraPlan = planScenes(cameras, durationMs, params, vad);
+    if (!(e > s)) return cameraPlan;
+    const sharePlan = planScenes(tracks.map((track) => (track.range ? { ...track, range: undefined } : track)), durationMs, params, vad);
+    const part = (scenes: Scene[], from: number, to: number): Scene[] => scenes.map((scene) => ({ ...scene, s: Math.max(scene.s, from), e: Math.min(scene.e, to) })).filter((scene) => scene.e > scene.s);
+    return mergeScenes([...part(cameraPlan, 0, s), ...part(sharePlan, s, e), ...part(cameraPlan, e, durationMs)]);
+  }
   const fit = params.fit === undefined ? {} : { fit: params.fit };
   const ids = cameras.map((track) => track.id);
   const screenId = screens[0]?.id;

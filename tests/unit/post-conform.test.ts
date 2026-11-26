@@ -52,6 +52,23 @@ describe("conform filters", () => {
     expect(audioConformFilter({ rate: 1, driftApplied: false, offsetMs: 0 }, 60)).not.toContain("asetrate");
   });
 
+  it.runIf(hasFfmpeg())("keeps a source with a dropped audio packet on the clock, so it still ends at the project length", async () => {
+    const run = promisify(execFile);
+    const dir = await mkdtemp(path.join(tmpdir(), "conform-gap-"));
+    try {
+      const whole = path.join(dir, "whole.webm");
+      const gap = path.join(dir, "gap.webm");
+      await run("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=10", "-ac", "1", "-ar", "48000", "-c:a", "libopus", "-b:a", "32k", whole]);
+      // every packet after 5 s is 60 ms late: the file's clock runs ahead of its samples, like after a dropped packet
+      await run("ffmpeg", ["-v", "error", "-i", whole, "-c", "copy", "-bsf:a", "setts=ts=TS+gte(TS*TB\\,5)*0.06/TB", gap]);
+      const out = path.join(dir, "out.flac");
+      await run("ffmpeg", ["-v", "error", "-i", gap, "-vn", "-af", audioConformFilter({ rate: 1, driftApplied: false, offsetMs: 0 }, 10.2), "-ac", "1", "-ar", "48000", "-c:a", "flac", out]);
+      expect(await probeDuration(out)).toBeCloseTo(10.2, 2);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("pads video in whole frames and conforms to a constant frame rate", () => {
     const filter = videoProxyFilter({ rate: 1, offsetMs: 1000 }, 30);
     expect(filter).toContain("fps=30");
