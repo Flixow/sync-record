@@ -5,6 +5,7 @@ import { FasterWhisperEngine, type AsrEngine } from "./asr.js";
 import { conformHandler } from "./conform.js";
 import { JobRunner, type JobHandler } from "./jobs.js";
 import { ProjectStore } from "./projects.js";
+import { nullTelemetry, type Telemetry } from "../telemetry.js";
 import { thumbnailHandler } from "./thumbnail.js";
 import { renderHandler } from "./render.js";
 import { cutPreviewHandler } from "./render-audio.js";
@@ -22,18 +23,25 @@ export class PostProduction {
     readonly config: Config,
     readonly storage: Storage,
     asr?: AsrEngine,
+    telemetry: Telemetry = nullTelemetry,
   ) {
     this.store = new ProjectStore(config, storage);
     this.asr = asr ?? new FasterWhisperEngine(config);
     const count = cpus().length;
+    const conform = conformHandler({ config, store: this.store, cpus: count });
     const handlers: Record<string, JobHandler> = {
-      conform: conformHandler({ config, store: this.store, cpus: count }),
+      conform: async (ctx, job) => {
+        const result = await conform(ctx, job);
+        const project = await this.store.get(job.sid).catch(() => null);
+        telemetry.capture({ name: "project_ready", sid: job.sid, sources: project?.sources.length ?? 0, durationSec: (project?.durationMs ?? 0) / 1000 });
+        return result;
+      },
       thumbnail: thumbnailHandler({ config, store: this.store }),
       render: renderHandler({ config, store: this.store }),
       "cut-preview": cutPreviewHandler({ config, store: this.store }),
       transcribe: transcribeHandler({ config, store: this.store, engine: this.asr, cpus: count }),
     };
-    this.jobs = new JobRunner(config.post, handlers, count);
+    this.jobs = new JobRunner(config.post, handlers, count, telemetry);
     this.ready = this.jobs.init();
   }
 

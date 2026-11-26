@@ -1,5 +1,6 @@
 import path from "node:path";
 import { readFileSync } from "node:fs";
+import { telemetrySettings, type TelemetrySettings } from "./telemetry.js";
 import { DEFAULT_LLM_TIMEOUT_MS, LLM_PROVIDER_NAMES, llmTransport, type LlmProviderName, type LlmSettings } from "./post/llm.js";
 
 export type StorageDriverName = "local" | "s3";
@@ -27,6 +28,8 @@ export interface Config {
   ffprobePath: string;
   webDir: string;
   version: string;
+  /** Optional event sink; null (the default) sends nothing. Needs both POSTHOG_KEY and POSTHOG_HOST. */
+  telemetry: TelemetrySettings | null;
   post: PostConfig;
 }
 
@@ -173,6 +176,7 @@ export function loadConfig(env: Env = process.env): Config {
     ffprobePath: text(env, "FFPROBE_PATH") ?? "ffprobe",
     webDir: path.resolve(text(env, "WEB_DIR") ?? "./dist/web"),
     version: text(env, "APP_VERSION") ?? "0.1.0",
+    telemetry: telemetrySettings(text(env, "POSTHOG_KEY"), text(env, "POSTHOG_HOST")),
     post: {
       dir: postDir,
       concurrency: integer(env, "POST_CONCURRENCY", 1, 1, 8),

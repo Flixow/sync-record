@@ -86,7 +86,7 @@ Everything is read from the environment (see `.env.example`). Nothing is hardcod
 | `TOKEN_SIGNING_SECRET` | required | At least 16 characters. Signs invite and participant tokens. |
 | `SESSION_CREATE_KEY` | empty | When set, creating a session requires this key. Use it on any public deployment. |
 | `HOST`, `PORT` | `127.0.0.1`, `8080` | Listen address. |
-| `TOKEN_TTL_HOURS` | `72` | Lifetime of invite and participant tokens. A participant token is renewed every time the participant opens the session page. |
+| `TOKEN_TTL_HOURS` | `72` | Lifetime of invite and participant tokens. A participant token is renewed every time the participant opens the session page; the host's invite link is renewed the same way, so it stays valid while the host keeps coming back. |
 | `MAX_UPLOAD_BYTES` | `16777216` | Largest accepted upload request. |
 | `STORAGE_DRIVER` | `local` | `local` or `s3`. |
 | `STORAGE_LOCAL_DIR` | `./data` | Directory for the local driver. |
@@ -108,6 +108,7 @@ Everything is read from the environment (see `.env.example`). Nothing is hardcod
 | `LLM_MODEL` | `default` | Model name sent to the endpoint. Required for `omp-gateway` (`provider/model-id`). |
 | `LLM_API_KEY`, `LLM_API_KEY_FILE` | empty | Bearer key for the endpoint, from the environment or from a file (use the file with Docker/Kubernetes secrets); set at most one. Refused over plain `http://` unless the host is this machine, Docker's `host.docker.internal` or a Tailscale address. |
 | `LLM_TIMEOUT_MS` | `60000` | Per-request timeout, 1000 to 600000. A timeout counts as a failure: the built-in rules answer instead. |
+| `POSTHOG_KEY`, `POSTHOG_HOST` | empty | Optional telemetry sink, **off unless both are set**. See [Telemetry](#telemetry). |
 | `WEB_DIR` | `./dist/web` | Built web client. |
 
 ## Output
@@ -362,6 +363,37 @@ It launches Chromium itself, so install one first (`npx playwright install chrom
 must have been started with the flags in `FAKE_MEDIA_ARGS` (see `tests/e2e/session.spec.ts`). The test runs with one
 worker because both participants share the machine. The guest also shares a screen (the browser must auto-select a
 capture source, which `FAKE_MEDIA_ARGS` does); set `E2E_SCREEN=0` to leave the screen track out.
+
+## Telemetry
+
+Off by default. The collector sends nothing to anyone unless you set **both** `POSTHOG_KEY` (the project API key of your
+own PostHog project) and `POSTHOG_HOST` (its ingestion URL) in the environment. With either one empty or missing, no
+telemetry code makes a network call. No key or host is built into the source, the web bundle or the Docker image: they
+exist only in the environment you give the running collector.
+
+When enabled, the collector (never the browser) sends these events, one HTTPS request each, and nothing else:
+
+| Event | Properties |
+| --- | --- |
+| `session_created` | a session reference |
+| `session_joined` | session reference, number of participants |
+| `recording_started` | session reference, whether audio, camera and screen are recorded (three booleans) |
+| `recording_stopped` | session reference |
+| `session_ended` | session reference, number of participants, number of audio, camera and screen tracks, whether the host forced the end, session length in seconds |
+| `project_ready` | session reference, number of sources, project length in seconds |
+| `error` | `source` (`http`, `job`, `remux` or `recorder`), a short error code such as `internal_error`, `remux_failed` or `end_crash`, and for `http` the status (500 and above only) |
+
+Every event also carries the collector's version, an anonymous random instance id that is created when the process
+starts and never stored, `$lib`, and the flags `$process_person_profile: false` and `$geoip_disable: true`. The
+session reference is a keyed hash of the session id: it ties the events of one session together but cannot be turned
+back into the session id, an invite link or a participant.
+
+Never sent: audio, video, screenshots, transcripts, names, e-mail addresses, file names, user agents, tokens,
+participant ids, error messages or stack traces, and no request from a browser. The web client has no analytics
+library, no autocapture and no session replay, and the page's content security policy only allows connections to the
+collector itself. The collector does not send a client IP address; your PostHog server still sees the address of the
+collector, so switch on "Discard client IP data" in the PostHog project settings to drop even that. Sending is best
+effort: a slow or unreachable PostHog host never delays or fails a recording.
 
 ## Limits and honest notes
 

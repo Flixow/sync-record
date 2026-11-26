@@ -4,6 +4,7 @@ import path from "node:path";
 import type { JobRecord } from "../../shared/project.js";
 import type { PostConfig } from "../config.js";
 import { HttpError } from "../errors.js";
+import { nullTelemetry, type Telemetry } from "../telemetry.js";
 import { CanceledError, type ToolContext } from "./exec.js";
 
 export interface JobContext extends ToolContext {
@@ -60,6 +61,7 @@ export class JobRunner {
     private readonly config: PostConfig,
     private readonly handlers: Record<string, JobHandler>,
     private readonly cpus: number,
+    private readonly telemetry: Telemetry = nullTelemetry,
   ) {}
 
   private file(job: Pick<JobRecord, "sid" | "id">): string {
@@ -235,6 +237,7 @@ export class JobRunner {
         } else {
           job.status = "failed";
           job.error = error instanceof Error ? error.message.slice(0, 500) : "job failed";
+          this.telemetry.capture({ name: "error", source: "job", code: `${job.kind.replace(/-/g, "_")}_failed` });
         }
       }
       job.pid = null;

@@ -10,6 +10,7 @@ import { postRoutes } from "./post/api.js";
 import type { AsrEngine } from "./post/asr.js";
 import { PostProduction } from "./post/index.js";
 import type { Storage } from "./storage/index.js";
+import { createTelemetry, type Telemetry } from "./telemetry.js";
 import { verifyToken, type TokenClaims } from "./tokens.js";
 import * as v from "./validate.js";
 
@@ -42,11 +43,13 @@ export interface App {
   server: Server;
   collector: Collector;
   post: PostProduction;
+  telemetry: Telemetry;
 }
 
 export function createApp(config: Config, storage: Storage, asr?: AsrEngine): App {
-  const collector = new Collector(config, storage);
-  const post = new PostProduction(config, storage, asr);
+  const telemetry = createTelemetry(config.telemetry, config.tokenSecret, config.version);
+  const collector = new Collector(config, storage, telemetry);
+  const post = new PostProduction(config, storage, asr, telemetry);
   const server = createServer((req, res) => {
     void handle(req, res).catch((error: unknown) => fail(res, error));
   });
@@ -63,10 +66,12 @@ export function createApp(config: Config, storage: Storage, asr?: AsrEngine): Ap
       return;
     }
     if (error instanceof HttpError) {
+      if (error.status >= 500) telemetry.capture({ name: "error", source: "http", code: error.code, status: error.status });
       json(res, error.status, { error: error.code, ...error.extra });
       return;
     }
     console.error("unhandled request error", error);
+    telemetry.capture({ name: "error", source: "http", code: "internal_error", status: 500 });
     json(res, 500, { error: "internal_error" });
   }
 
@@ -291,5 +296,5 @@ export function createApp(config: Config, storage: Storage, asr?: AsrEngine): Ap
     await serveStatic(req, res, url);
   }
 
-  return { server, collector, post };
+  return { server, collector, post, telemetry };
 }

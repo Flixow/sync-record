@@ -271,6 +271,7 @@ export class Room {
     try {
       const view = await this.api.view();
       if (view.renewedToken) this.api.token = view.renewedToken; // sliding expiry: every visit renews the token
+      if (view.renewedInviteToken) this.creds.inviteToken = view.renewedInviteToken; // the invite link of a host that comes back must not have expired
       this.roster = view.roster;
       this.ended = view.ended;
     } catch (error) {
@@ -283,7 +284,7 @@ export class Room {
         return this.notify();
       }
     }
-    if (this.api.token !== this.creds.participantToken) saveCredentials(this.sid, { ...this.creds, participantToken: this.api.token });
+    saveCredentials(this.sid, { ...this.creds, participantToken: this.api.token });
     void this.clock.handshake().then(() => this.notify()).catch(() => this.notice("error", t("err.server")));
     this.connectEvents();
     await this.recoverRecordings();

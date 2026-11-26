@@ -21,6 +21,7 @@ import { buildManifest } from "./manifest.js";
 import type { ParticipantRecord, SessionRecord, TrackRecord } from "./model.js";
 import { remuxTrack } from "./remux.js";
 import type { Storage } from "./storage/index.js";
+import { nullTelemetry, type Telemetry } from "./telemetry.js";
 import { issueToken } from "./tokens.js";
 
 const MARKER_LEAD_MS = 3000;
@@ -79,6 +80,7 @@ export class Collector {
   constructor(
     private readonly config: Config,
     private readonly storage: Storage,
+    private readonly telemetry: Telemetry = nullTelemetry,
   ) {
     this.heartbeat = setInterval(() => {
       for (const runtime of this.sessions.values()) {
@@ -111,6 +113,7 @@ export class Collector {
     const runtime = this.adopt(record);
     const host = this.addParticipant(runtime, name, true, userAgent);
     await this.persist(runtime);
+    this.telemetry.capture({ name: "session_created", sid: id });
     return {
       sessionId: id,
       participantId: host.id,
@@ -126,6 +129,7 @@ export class Collector {
     const participant = this.addParticipant(runtime, name, false, userAgent);
     await this.persist(runtime);
     this.broadcastRoster(runtime);
+    this.telemetry.capture({ name: "session_joined", sid, participants: runtime.record.participants.length });
     return { sessionId: sid, participantId: participant.id, participantToken: this.participantToken(sid, participant) };
   }
 
@@ -134,6 +138,7 @@ export class Collector {
     const caller = this.participant(runtime, pid);
     return {
       renewedToken: this.participantToken(sid, caller),
+      ...(caller.host ? { renewedInviteToken: this.inviteToken(sid) } : {}),
       sessionId: sid,
       ended: runtime.record.endedAtMs !== null,
       maxParticipants: MAX_PARTICIPANTS,
@@ -149,7 +154,10 @@ export class Collector {
   async setStatus(sid: string, pid: string, request: StatusRequest): Promise<void> {
     const runtime = await this.load(sid);
     const participant = this.participant(runtime, pid);
+    const before = runtime.presence.get(pid)?.state;
     runtime.presence.set(pid, { state: request.state, kinds: request.kinds });
+    if (request.state === "recording" && before !== "recording") this.telemetry.capture({ name: "recording_started", sid, kinds: request.kinds });
+    if (before === "recording" && request.state !== "recording") this.telemetry.capture({ name: "recording_stopped", sid });
     if (request.consentVersion !== undefined && participant.consent === null) {
       participant.consent = { version: request.consentVersion, atMs: nowMs() };
       await this.persist(runtime);
@@ -192,7 +200,20 @@ export class Collector {
       if (track.output?.status === "failed") track.output = null; // a repeated end retries failed remuxes
     }
     await this.persist(runtime);
-    if (firstEnd) this.broadcast(runtime, { type: "ended" });
+    if (firstEnd) {
+      this.broadcast(runtime, { type: "ended" });
+      const tracksOf = (kind: TrackKind): number => record.tracks.filter((track) => track.kind === kind).length;
+      this.telemetry.capture({
+        name: "session_ended",
+        sid,
+        participants: record.participants.length,
+        audioTracks: tracksOf("audio"),
+        cameraTracks: tracksOf("camera"),
+        screenTracks: tracksOf("screen"),
+        forced: force,
+        durationSec: ((record.endedAtMs ?? record.createdAtMs) - record.createdAtMs) / 1000,
+      });
+    }
     this.scheduleRemux(runtime);
     const manifest = await this.manifest(sid);
     await this.storage.put(`session/${sid}/manifest.json`, Buffer.from(JSON.stringify(manifest, null, 2)));
@@ -279,6 +300,7 @@ export class Collector {
     if (!track.finalized) {
       if (state.received !== request.totalBytes) throw new HttpError(409, "incomplete", { received: state.received });
       this.markFinalized(track, request);
+      if (request.endReason === "error" || request.endReason === "crash") this.telemetry.capture({ name: "error", source: "recorder", code: `end_${request.endReason}` });
       await this.persist(runtime);
     }
     this.scheduleRemux(runtime);
@@ -467,6 +489,7 @@ export class Collector {
       });
       track.output = { status: "ok", file, bytes: result.bytes, durationSec: result.durationSec };
     } catch (error) {
+      this.telemetry.capture({ name: "error", source: "remux", code: "remux_failed" });
       track.output = { status: "failed", file, bytes: 0, durationSec: null, error: error instanceof Error ? error.message.slice(0, 300) : "remux failed" };
     } finally {
       this.remuxing.delete(track.id);
