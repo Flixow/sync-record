@@ -2,10 +2,11 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
-import { MAX_PARTICIPANTS, type DeclareTrackRequest, type FinalizeRequest, type StatusRequest } from "../shared/protocol.js";
+import { MAX_PARTICIPANTS, type CallTokenResponse, type DeclareTrackRequest, type FinalizeRequest, type StatusRequest } from "../shared/protocol.js";
 import { Collector } from "./collector.js";
 import type { Config } from "./config.js";
 import { HttpError } from "./errors.js";
+import { callRoomName, issueCallToken, livekitOrigins } from "./livekit.js";
 import { postRoutes } from "./post/api.js";
 import type { AsrEngine } from "./post/asr.js";
 import { PostProduction } from "./post/index.js";
@@ -27,18 +28,22 @@ const MIME: Record<string, string> = {
   ".txt": "text/plain; charset=utf-8",
 };
 
-const CSP = [
-  "default-src 'self'",
-  "script-src 'self'",
-  "style-src 'self'",
-  "img-src 'self' data: blob:",
-  "media-src 'self' blob:",
-  "connect-src 'self'",
-  "object-src 'none'",
-  "base-uri 'none'",
-  "frame-ancestors 'none'",
-  "form-action 'self'",
-].join("; ");
+/** The page may only connect to itself and, when a call is configured, to that one LiveKit origin (signalling over wss, validation over https). */
+function contentSecurityPolicy(call: Config["call"]): string {
+  const origins = call ? livekitOrigins(call.url) : null;
+  return [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self'",
+    "img-src 'self' data: blob:",
+    "media-src 'self' blob:",
+    `connect-src 'self'${origins ? ` ${origins.ws} ${origins.http}` : ""}`,
+    "object-src 'none'",
+    "base-uri 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+  ].join("; ");
+}
 
 const SMALL_BODY_BYTES = 4096;
 
@@ -50,6 +55,7 @@ export interface App {
 
 export function createApp(config: Config, storage: Storage, asr?: AsrEngine): App {
   const collector = new Collector(config, storage);
+  const csp = contentSecurityPolicy(config.call);
   const post = new PostProduction(config, storage, asr);
   const telemetry = createTelemetry(config.telemetry);
   post.jobs.onFailed = (job) => telemetry.capture("job_failed", { kind: job.kind });
@@ -185,6 +191,21 @@ export function createApp(config: Config, storage: Storage, asr?: AsrEngine): Ap
       await collector.subscribe(sid, who.pid, res);
       return;
     }
+    if (method === "POST" && rest.length === 1 && rest[0] === "call-token") {
+      if (!config.call) throw new HttpError(503, "call_disabled");
+      const caller = await collector.callParticipant(sid, who.pid);
+      const issued = issueCallToken(config.call, { room: callRoomName(sid), identity: who.pid, name: caller.name, host: caller.host });
+      const body: CallTokenResponse = {
+        url: config.call.url,
+        token: issued.token,
+        expiresAtMs: issued.expiresAtMs,
+        room: callRoomName(sid),
+        identity: who.pid,
+        host: caller.host,
+      };
+      json(res, 200, body);
+      return;
+    }
     if (method === "POST" && rest.length === 1 && rest[0] === "clock") {
       json(res, 200, collector.clock());
       return;
@@ -318,7 +339,7 @@ export function createApp(config: Config, storage: Storage, asr?: AsrEngine): Ap
     const url = new URL(req.url ?? "/", "http://localhost");
     res.setHeader("x-content-type-options", "nosniff");
     res.setHeader("referrer-policy", "no-referrer");
-    res.setHeader("content-security-policy", CSP);
+    res.setHeader("content-security-policy", csp);
     res.setHeader("permissions-policy", "microphone=(self), camera=(self), display-capture=(self)");
     res.setHeader("x-robots-tag", "noindex, nofollow");
     if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {

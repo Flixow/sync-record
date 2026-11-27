@@ -47,6 +47,8 @@ export interface SessionView {
   ended: boolean;
   maxParticipants: number;
   roster: RosterEntry[];
+  /** True when the collector has a LiveKit server configured: the page then offers the call. */
+  callEnabled: boolean;
   /** A fresh token with a new expiry for the caller (sliding expiry: every visit renews it). */
   renewedToken: string;
   /** Host only: a fresh invite token with a new expiry, so the invite link shown to the host never goes stale while the host keeps the page open. */
@@ -81,6 +83,20 @@ export interface ClaimLinkResponse {
 
 export interface ClaimResponse extends JoinResponse {
   name: string;
+}
+
+/** Credentials of one participant for the in-product call (LiveKit). The token is short-lived: ask again to reconnect. */
+export interface CallTokenResponse {
+  /** Signalling URL of the LiveKit server. */
+  url: string;
+  token: string;
+  /** Expiry of the token, ms since the epoch. */
+  expiresAtMs: number;
+  /** The LiveKit room of this session. */
+  room: string;
+  /** The participant's LiveKit identity: their SyncRecord participant id. */
+  identity: string;
+  host: boolean;
 }
 
 export interface ClockResponse {

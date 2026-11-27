@@ -38,6 +38,11 @@ export class TrackRecorder {
   private stopping: Promise<void> | null = null;
   recording!: LocalRecording;
 
+  /** The captured stream this recorder writes. The call publishes clones of its tracks, never the tracks themselves. */
+  get stream(): MediaStream {
+    return this.init.stream;
+  }
+
   private constructor(private readonly init: RecorderInit) {
     this.kind = init.kind;
   }

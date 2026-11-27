@@ -11,6 +11,7 @@ import {
 } from "../../shared/protocol.js";
 import { ApiError, SessionApi, saveCredentials, type StoredCredentials } from "./api.js";
 import { playBeep, unlockAudio } from "./audio.js";
+import { Call, type CallSource } from "./call.js";
 import { ClockSync, clientNowMs } from "./clock.js";
 import {
   listDevices,
@@ -61,6 +62,8 @@ export class Room {
   readonly api: SessionApi;
   readonly uploader: Uploader;
   readonly clock: ClockSync;
+  /** The optional conversation (LiveKit); null until the collector says it is configured. It never feeds the recorders. */
+  call: Call | null = null;
 
   // observable state
   phase: Phase = "setup";
@@ -155,6 +158,7 @@ export class Room {
     if (this.disposed) return;
     for (const listener of this.listeners) listener();
     this.syncPresence();
+    void this.call?.sync(); // the recording path may have a new track (device change, take started, screen share on or off)
   }
 
   get isHost(): boolean {
@@ -276,6 +280,7 @@ export class Room {
       if (view.renewedInviteToken) this.creds.inviteToken = view.renewedInviteToken; // the invite link of a host that comes back must not have expired
       this.roster = view.roster;
       this.ended = view.ended;
+      if (view.callEnabled) this.enableCall();
     } catch (error) {
       if (error instanceof ApiError && (error.status === 401 || error.status === 403)) this.fatal = "invalid";
       else if (error instanceof ApiError && error.status === 404) this.fatal = "notFound";
@@ -304,6 +309,36 @@ export class Room {
     if (this.ended && this.isHost) void this.pollResults();
   }
 
+  private enableCall(): void {
+    if (this.call) return;
+    const call = new Call({
+      token: () => this.api.callToken(),
+      track: (source) => this.trackForCall(source),
+      joinMuted: () => this.headphones !== "yes",
+    });
+    // The call card redraws on call changes only; a call change must not run the recording-side sync again.
+    call.subscribe(() => {
+      if (!this.disposed) for (const listener of this.listeners) listener();
+    });
+    this.call = call;
+  }
+
+  /**
+   * The live track of the recording path for a source: the track an active recorder writes, or else the setup preview that the
+   * recorder will take over. The call publishes a clone of it (see Call), so the recorders keep exactly what they had.
+   */
+  private trackForCall(source: CallSource): MediaStreamTrack | null | undefined {
+    const kind: TrackKind = source === "microphone" ? "audio" : source === "camera" ? "camera" : "screen";
+    const recorders = this.recorders.filter((recorder) => recorder.active && recorder.kind === kind);
+    const stream = recorders.at(-1)?.stream ?? (source === "microphone" ? this.micStream : source === "camera" ? this.camStream : null);
+    const track = (kind === "audio" ? stream?.getAudioTracks()[0] : stream?.getVideoTracks()[0]) ?? null;
+    if (track?.readyState === "live") return track;
+    // Between takes the devices are released: the conversation goes on with the clones it already has. Only a screen
+    // share that ended, or a camera the user no longer wants, stops being sent.
+    if (source === "screen") return null;
+    return source === "camera" && !this.wantCamera ? null : undefined;
+  }
+
   private connectEvents(): void {
     const source = new EventSource(this.api.eventsUrl());
     this.events = source;
@@ -325,6 +360,7 @@ export class Room {
       this.onMarker(event.marker);
     } else if (event.type === "ended") {
       this.ended = true;
+      void this.call?.leave();
       void this.stopMine("sessionEnded").then(() => {
         if (this.isHost) void this.pollResults();
       });
@@ -814,6 +850,7 @@ export class Room {
     try {
       this.results = await this.api.end(force);
       this.ended = true;
+      void this.call?.leave();
       await this.stopMine("sessionEnded");
       void this.pollResults();
     } catch (error) {
@@ -843,6 +880,7 @@ export class Room {
     this.events?.close();
     this.clock.stopPeriodic();
     this.offDeviceChange?.();
+    void this.call?.leave();
     if (this.storageTimer !== null) window.clearInterval(this.storageTimer);
     if (this.resultsTimer !== null) window.clearTimeout(this.resultsTimer);
     window.removeEventListener("beforeunload", this.onBeforeUnload);

@@ -1,4 +1,5 @@
 import type {
+  CallTokenResponse,
   ClaimLinkResponse,
   ClaimResponse,
   ClockResponse,
@@ -86,6 +87,7 @@ export class SessionApi {
 
   view = () => call<SessionView>("GET", this.path(), { token: this.token });
   claimLink = () => call<ClaimLinkResponse>("POST", this.path("/claim-links"), { token: this.token, json: {} });
+  callToken = () => call<CallTokenResponse>("POST", this.path("/call-token"), { token: this.token, json: {} });
   clock = () => call<ClockResponse>("POST", this.path("/clock"), { token: this.token, timeoutMs: 4000 });
   status = (request: StatusRequest) => call<void>("POST", this.path("/status"), { token: this.token, json: request });
   marker = () => call<MarkerEvent>("POST", this.path("/markers"), { token: this.token, json: {} });
