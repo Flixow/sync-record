@@ -8,6 +8,8 @@ export default defineConfig({
     outDir: "../../dist/web",
     emptyOutDir: true,
     target: "es2023",
+    // The LiveKit client (about 580 kB) is its own chunk, downloaded only when someone joins the conversation.
+    chunkSizeWarningLimit: 650,
   },
   server: {
     port: 5173,

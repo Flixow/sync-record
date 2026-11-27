@@ -8,6 +8,7 @@ import type { TrackRecorder } from "../lib/recorder.js";
 import { segmentNumber } from "../lib/screen-share.js";
 import { formatBytes, formatDuration, minutesLeft, plannedBytes, PLANNED_HOURS, storageLevel } from "../lib/storage-math.js";
 import { getLang, t } from "../i18n/index.js";
+import { callCard } from "./call-view.js";
 import { banner, card, header } from "./layout.js";
 
 /** "Screen", and "Screen #2" for the second share of this take. */
@@ -149,6 +150,7 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
   const rosterCard = card(t("roster.title"), rosterBody);
   const localCard = card(t("local.title"), localBody, h("p", { class: "hint" }, t("local.note")));
   const inviteCard = card(t("room.invite.title"), inviteBody);
+  const call = callCard(room);
 
   // static texts of persistent buttons
   allowButton.textContent = t("setup.allow");
@@ -462,6 +464,9 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
     finishedCard.hidden = !(usable && room.phase === "finished");
     resultsCard.hidden = !(usable && room.isHost && room.ended);
     rosterCard.hidden = !usable;
+    // The conversation card exists only when the collector has a LiveKit server; it is independent of the recording phase.
+    call.el.hidden = !(usable && room.call !== null && !room.ended);
+    if (!call.el.hidden) call.update();
     // Local copies stay reachable (download, delete) even when the token expired.
     localCard.hidden = !(room.missingFeatures.length === 0 && room.lock === "held");
     inviteCard.hidden = true;
@@ -498,7 +503,7 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
   });
 
   const heading = h("h1", { class: "page-title", "data-testid": "session-id" }, t("room.session", { id: room.sid.slice(0, 8) }));
-  const el = h("div", { class: "shell" }, header(), h("main", { class: "page room" }, heading, banners, h("div", { class: "room-grid" }, h("div", { class: "main-col" }, setupCard, recordingCard, finishedCard, resultsCard), h("div", { class: "side-col" }, inviteCard, rosterCard, localCard))));
+  const el = h("div", { class: "shell" }, header(), h("main", { class: "page room" }, heading, banners, h("div", { class: "room-grid" }, h("div", { class: "main-col" }, call.el, setupCard, recordingCard, finishedCard, resultsCard), h("div", { class: "side-col" }, inviteCard, rosterCard, localCard))));
 
   // Elapsed time and the clap prompt refresh once a second while recording.
   const ticker = window.setInterval(() => {
