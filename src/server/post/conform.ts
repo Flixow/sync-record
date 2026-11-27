@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { CONFORM_SAMPLE_RATE, LEVEL_FLOOR_DB, LEVEL_FRAME_MS, PEAKS_PER_SECOND, PROXY_HEIGHT, frameMs, type JobRecord, type ProjectFile, type ProjectSource } from "../../shared/project.js";
@@ -31,16 +31,28 @@ export async function timelineEndOf(ffprobePath: string, file: string): Promise<
   return value("start_time") + value("duration");
 }
 
-/** The audio filter that puts a source on the project timeline: drift correction, start offset, padding to the project length. */
+/**
+ * The audio filter that puts a source on the project timeline: gaps filled, drift correction, start offset, padding to
+ * the project length. The length is counted in samples, never in timestamps: a recording whose timestamps run ahead of
+ * or behind its samples (a dropped or overlapping packet, which browsers produce now and then) still ends on the sample
+ * the project ends on. Trimming by timestamp (`atrim=end`) let such a file run 50-60 ms long, which failed the
+ * duration check of the conform job.
+ */
 export function audioConformFilter(source: Pick<ProjectSource, "rate" | "driftApplied" | "offsetMs">, projectDurationSec: number): string {
-  // Browsers drop an audio packet now and then: the file's timestamps then run ahead of its samples. Filling the gaps
-  // with silence keeps the samples on the clock, so the padding and the trim below land on the project length.
-  const chain: string[] = ["asetpts=PTS-STARTPTS", "aresample=async=1000:first_pts=0"];
+  const projectSamples = Math.round(projectDurationSec * CONFORM_SAMPLE_RATE);
+  // A gap in the timestamps (a dropped packet) is filled with silence so the samples stay on the clock. The hard
+  // compensation threshold is lowered to 20 ms because a dropped Opus packet is 20-60 ms, under the default 100 ms.
+  // `first_pts` is left out on purpose: with it the ffmpeg of Debian 12 (5.1, the one in the image) fills a gap with as
+  // much silence as the gap's position on the timeline; the timestamps start at 0 after `asetpts` anyway.
+  const chain: string[] = ["asetpts=PTS-STARTPTS", "aresample=async=1000:min_hard_comp=0.02"];
   if (source.driftApplied) {
     chain.push(`aresample=${DRIFT_PIVOT_RATE}`, `asetrate=${Math.round(DRIFT_PIVOT_RATE * source.rate)}`, `aresample=${CONFORM_SAMPLE_RATE}`);
+  } else {
+    // The sample counts below are in the rate of the project, not of the recording.
+    chain.push(`aresample=${CONFORM_SAMPLE_RATE}`);
   }
   if (source.offsetMs > 0) chain.push(`adelay=${source.offsetMs.toFixed(3)}ms:all=1`);
-  chain.push(`apad=whole_dur=${projectDurationSec.toFixed(6)}`, `atrim=end=${projectDurationSec.toFixed(6)}`);
+  chain.push(`apad=whole_len=${projectSamples}`, `atrim=end_sample=${projectSamples}`);
   return chain.join(",");
 }
 
@@ -76,11 +88,48 @@ export function videoProxyFilter(source: Pick<ProjectSource, "rate" | "offsetMs"
  */
 const VIDEO_END_TOLERANCE_FRAMES = 2;
 
+/**
+ * How far a conformed audio file may end from the project length, in video frames. The conform cuts it to the exact
+ * sample, so the file is off by microseconds; a frame is the most an edit may be out of sync with the pictures, and a
+ * file that differs by more is a real fault (wrong padding, a lost stretch), not rounding.
+ */
+const AUDIO_END_TOLERANCE_FRAMES = 1;
+
+/** The mixed audio proxy is AAC, which pads its last frame: the encoder delay comes on top of one video frame. */
+const MIX_ENCODER_DELAY_SEC = 0.05;
+
 export interface ConformCheck {
   file: string;
   expectedSec: number;
   actualSec: number;
   inTolerance: boolean;
+}
+
+export function durationCheck(file: string, expectedSec: number, actualSec: number, toleranceSec: number): ConformCheck {
+  return { file, expectedSec, actualSec, inTolerance: Math.abs(actualSec - expectedSec) <= toleranceSec };
+}
+
+/** The tolerance of the end of a conformed audio file against the project length. */
+export function audioEndToleranceSec(fps: number): number {
+  return AUDIO_END_TOLERANCE_FRAMES / fps;
+}
+
+/** The tolerance of the end of a video proxy against the end of its source on the timeline. */
+export function videoEndToleranceSec(fps: number): number {
+  return VIDEO_END_TOLERANCE_FRAMES / fps;
+}
+
+/**
+ * Whether an output of an earlier run can be kept. A file that is there but fails its own duration check (made by an
+ * older version, or by a run that was killed in a way the rename did not catch) is removed so that the retry rebuilds
+ * it; keeping it would fail every retry with the same message.
+ */
+async function keepExisting(file: string, measure: () => Promise<number>, expectedSec: number, toleranceSec: number): Promise<boolean> {
+  if (!(await exists(file))) return false;
+  const actual = await measure().catch(() => Number.NaN);
+  if (Math.abs(actual - expectedSec) <= toleranceSec) return true;
+  await rm(file, { force: true });
+  return false;
 }
 
 export interface ConformDeps {
@@ -162,7 +211,6 @@ export function conformHandler(deps: ConformDeps) {
       const total = weights.reduce((sum, weight) => sum + weight, 0) + projectSec * 0.5 || 1;
       let doneWeight = 0;
       const checks: ConformCheck[] = [];
-      const frameSec = 1 / project.fps;
 
       for (const [index, source] of project.sources.entries()) {
         const local = await deps.store.localSource(sid, source.sourceKey, source.id);
@@ -175,7 +223,9 @@ export function conformHandler(deps: ConformDeps) {
           const peaksFile = path.join("peaks", `${source.id}.bin`);
           const levelsFile = path.join("levels", `${source.id}.bin`);
           const absolute = path.join(dir, audioFile);
-          if (!(await exists(absolute))) {
+          let rebuilt = false;
+          if (!(await keepExisting(absolute, () => durationOf(deps.config.ffprobePath, absolute), projectSec, audioEndToleranceSec(project.fps)))) {
+            rebuilt = true;
             await mkdir(path.dirname(absolute), { recursive: true });
             const temp = path.join(dir, "conformed", `${source.id}.part.flac`);
             await ffmpeg(
@@ -187,13 +237,13 @@ export function conformHandler(deps: ConformDeps) {
           }
           const peaksAbsolute = path.join(dir, peaksFile);
           const levelsAbsolute = path.join(dir, levelsFile);
-          if (!(await exists(peaksAbsolute)) || !(await exists(levelsAbsolute))) {
+          if (rebuilt || !(await exists(peaksAbsolute)) || !(await exists(levelsAbsolute))) {
             await mkdir(path.dirname(peaksAbsolute), { recursive: true });
             await mkdir(path.dirname(levelsAbsolute), { recursive: true });
             await writeAnalysis(ctx, deps, absolute, peaksAbsolute, levelsAbsolute);
           }
           const actual = await durationOf(deps.config.ffprobePath, absolute);
-          checks.push({ file: audioFile, expectedSec: projectSec, actualSec: actual, inTolerance: Math.abs(actual - projectSec) <= frameSec });
+          checks.push(durationCheck(audioFile, projectSec, actual, audioEndToleranceSec(project.fps)));
           await deps.store.update(sid, (draft) => {
             const target = draft.sources.find((candidate) => candidate.id === source.id);
             if (target) target.audio = { file: audioFile, peaks: peaksFile, levels: levelsFile };
@@ -203,7 +253,8 @@ export function conformHandler(deps: ConformDeps) {
         if (source.hasVideo) {
           const videoFile = path.join("proxies", `${source.id}.mp4`);
           const absolute = path.join(dir, videoFile);
-          if (!(await exists(absolute))) {
+          const expected = (source.offsetMs + source.timelineDurationMs) / 1000;
+          if (!(await keepExisting(absolute, () => timelineEndOf(deps.config.ffprobePath, absolute), expected, videoEndToleranceSec(project.fps)))) {
             await mkdir(path.dirname(absolute), { recursive: true });
             const temp = path.join(dir, "proxies", `${source.id}.part.mp4`);
             await ffmpeg(
@@ -217,9 +268,8 @@ export function conformHandler(deps: ConformDeps) {
             );
             await rename(temp, absolute);
           }
-          const expected = (source.offsetMs + source.timelineDurationMs) / 1000;
           const actual = await timelineEndOf(deps.config.ffprobePath, absolute);
-          checks.push({ file: videoFile, expectedSec: expected, actualSec: actual, inTolerance: Math.abs(actual - expected) <= VIDEO_END_TOLERANCE_FRAMES * frameSec });
+          checks.push(durationCheck(videoFile, expected, actual, videoEndToleranceSec(project.fps)));
           await deps.store.update(sid, (draft) => {
             const target = draft.sources.find((candidate) => candidate.id === source.id);
             if (target) target.video = { file: videoFile, width: Math.round(((source.width ?? 16) / (source.height ?? 9)) * PROXY_HEIGHT / 2) * 2, height: PROXY_HEIGHT, fps: project.fps };
@@ -255,7 +305,8 @@ async function buildMix(ctx: JobContext, deps: ConformDeps, project: ProjectFile
   const file = path.join("proxies", "mix.m4a");
   const absolute = path.join(dir, file);
   const projectSec = project.durationMs / 1000;
-  if (!(await exists(absolute))) {
+  const tolerance = 1 / project.fps + MIX_ENCODER_DELAY_SEC;
+  if (!(await keepExisting(absolute, () => durationOf(deps.config.ffprobePath, absolute), projectSec, tolerance))) {
     await mkdir(path.dirname(absolute), { recursive: true });
     const temp = path.join(dir, "proxies", "mix.part.m4a");
     const args: string[] = [];
@@ -271,6 +322,5 @@ async function buildMix(ctx: JobContext, deps: ConformDeps, project: ProjectFile
     draft.mixProxy = file;
   });
   const actual = await durationOf(deps.config.ffprobePath, absolute);
-  // AAC pads its last frame: allow the encoder delay on top of one video frame.
-  return { file, expectedSec: projectSec, actualSec: actual, inTolerance: Math.abs(actual - projectSec) <= 1 / project.fps + 0.05 };
+  return durationCheck(file, projectSec, actual, tolerance);
 }
