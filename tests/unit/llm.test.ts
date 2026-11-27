@@ -176,7 +176,15 @@ describe("the Anthropic Messages client", () => {
     expect(request.headers["anthropic-version"]).toBe("2023-06-01");
     expect(request.contentType).toBe("application/json");
     expect(request.headers.authorization).toBeUndefined();
-    expect(JSON.parse(request.body)).toEqual({ model: "test-opus", max_tokens: 321, system: "be brief", messages: [{ role: "user", content: "hello" }] });
+    expect(JSON.parse(request.body)).toEqual({ model: "test-opus", max_tokens: 321 + 4096, system: "be brief", messages: [{ role: "user", content: "hello" }] });
+  });
+
+  it("asks for low effort only when the prompt does, and leaves room for thinking in max_tokens", async () => {
+    const server = await fake(messageAnswer({ ok: true }));
+    const llm = anthropicClient(server.url);
+    await llm.rank({ system: "s", user: "u", maxTokens: 100, effort: "low" });
+    const body = JSON.parse((server.seen.at(-1) as Seen).body) as { max_tokens: number; output_config?: { effort: string } };
+    expect(body).toMatchObject({ max_tokens: 100 + 4096, output_config: { effort: "low" } });
   });
 
   it("reads the text blocks (a thinking block is skipped, a fence stripped) and accepts a base URL ending in /v1", async () => {
