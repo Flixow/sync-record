@@ -4,9 +4,19 @@ import { clientNowMs } from "../lib/clock.js";
 import { h, setChildren } from "../lib/dom.js";
 import type { LocalRecording } from "../lib/opfs.js";
 import type { Room } from "../lib/room.js";
+import type { TrackRecorder } from "../lib/recorder.js";
+import { segmentNumber } from "../lib/screen-share.js";
 import { formatBytes, formatDuration, minutesLeft, plannedBytes, PLANNED_HOURS, storageLevel } from "../lib/storage-math.js";
 import { getLang, t } from "../i18n/index.js";
 import { banner, card, header } from "./layout.js";
+
+/** "Screen", and "Screen #2" for the second share of this take. */
+function trackName(recording: LocalRecording, recorders: readonly TrackRecorder[]): string {
+  const name = t(`rec.track.${recording.meta.kind}`);
+  const recorder = recorders.find((item) => item.recording === recording);
+  const number = recorder ? segmentNumber(recorders, recorder) : 1;
+  return number > 1 ? `${name} #${number}` : name;
+}
 
 const KIND_ORDER: TrackKind[] = ["audio", "camera", "screen"];
 
@@ -61,6 +71,18 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
     if (confirm(t("rec.stopConfirm"))) void room.stopMine("stopped");
   });
   const beepButton = button("host-beep", "btn", () => void room.hostBeep());
+  // Share screen / Stop sharing while the take runs; the focus follows the control that can be pressed next.
+  const shareButton = button("share-screen", "btn", () =>
+    void room.shareScreen().then(() => {
+      if (room.screenControls.stop) stopShareButton.focus();
+    }),
+  );
+  const stopShareButton = button("stop-sharing", "btn", () =>
+    void room.stopSharing().then(() => {
+      if (room.screenControls.share) shareButton.focus();
+    }),
+  );
+  const shareNote = h("span", { class: "hint", role: "status", "data-testid": "screen-share-state" });
   const highlightButton = button("mark-highlight", "btn", () => void room.markHighlight());
   const highlightNote = h("p", { class: "hint", role: "status", "data-testid": "highlight-note" });
   const endButton = button("end-session", "btn btn-ghost", () => {
@@ -137,6 +159,8 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
   highlightButton.textContent = t("rec.highlight");
   highlightButton.title = t("rec.highlightHint");
   beepButton.title = t("rec.beepHint");
+  shareButton.textContent = t("rec.screen.share");
+  stopShareButton.textContent = t("rec.screen.stop");
   endButton.textContent = t("rec.end");
   anotherButton.textContent = t("fin.again");
   forceButton.textContent = t("res.force");
@@ -155,6 +179,8 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
     h("p", { class: "hint" }, t("rec.keepOpen")),
     h("div", { class: "row" }, highlightButton, stopButton, beepButton, endButton),
     highlightNote,
+    h("div", { class: "row", role: "group", "aria-label": t("rec.screen.group"), "data-testid": "screen-share" }, shareButton, stopShareButton, shareNote),
+    h("p", { class: "hint" }, t("rec.screen.hint")),
   );
   setChildren(
     inviteBody,
@@ -251,7 +277,7 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
     return h(
       "li",
       { class: "track-row", "data-testid": `track-${recording.meta.kind}`, "data-upload": status.phase },
-      h("div", { class: "track-head" }, h("strong", {}, t(`rec.track.${recording.meta.kind}`)), live ? h("span", { class: "dot-live" }) : null, h("span", { class: `pill pill-${status.phase}` }, t(`rec.upload.${status.phase}`))),
+      h("div", { class: "track-head" }, h("strong", {}, trackName(recording, room.recorders)), live ? h("span", { class: "dot-live" }) : null, h("span", { class: `pill pill-${status.phase}` }, t(`rec.upload.${status.phase}`))),
       h("div", { class: "bar" }, bar),
       h("div", { class: "muted small" }, `${t("rec.saved", { size: formatBytes(recording.totalBytes) })} · ${t("rec.uploaded", { size: formatBytes(uploaded) })}`),
     );
@@ -281,6 +307,10 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
         : null,
     );
     setChildren(trackList, ...currentRecordings().map((rec) => trackRow(rec, live.has(rec))));
+    const controls = room.screenControls;
+    shareButton.disabled = !controls.share;
+    stopShareButton.disabled = !controls.stop;
+    shareNote.textContent = t(controls.stop ? "rec.screen.on" : "rec.screen.off");
   }
 
   function updateFinished(): void {

@@ -205,6 +205,26 @@ describe("clock in the manifest", () => {
     };
     expect(manifest.participants[0]?.tracks[0]?.clock.uncertaintyMs).toBeNull();
   });
+
+  it("keeps every screen share of a take as its own numbered segment, with the other tracks unaffected", async () => {
+    const host = await session();
+    const base = `/api/sessions/${host.sessionId}`;
+    const declareAt = (trackId: string, kind: string, atMs: number) =>
+      api(server, "POST", `${base}/tracks`, { token: host.participantToken, json: { ...declare(trackId, kind), startClientMs: START_MS + atMs, startCallClientMs: START_MS + atMs - 10 } });
+    // the take starts with the microphone and the first share; the screen is stopped, shared again later and again
+    expect((await declareAt("aaaaaaaa-0000-4000-8000-000000000001", "audio", 0)).status).toBe(200);
+    expect((await declareAt("aaaaaaaa-0000-4000-8000-000000000002", "screen", 0)).status).toBe(200);
+    expect((await declareAt("aaaaaaaa-0000-4000-8000-000000000003", "screen", 60_000)).status).toBe(200);
+    expect((await declareAt("aaaaaaaa-0000-4000-8000-000000000004", "screen", 180_000)).status).toBe(200);
+    const manifest = (await api(server, "GET", `${base}/manifest`, { token: host.participantToken })).body as {
+      participants: { tracks: { trackId: string; kind: string; segment: number; startServerMsEstimated: number }[] }[];
+    };
+    const tracks = manifest.participants[0]?.tracks ?? [];
+    expect(tracks.map((item) => `${item.kind}:${item.segment}`)).toEqual(["audio:1", "screen:1", "screen:2", "screen:3"]);
+    const screens = tracks.filter((item) => item.kind === "screen");
+    expect(screens[1]?.startServerMsEstimated).toBe((screens[0]?.startServerMsEstimated ?? 0) + 60_000);
+    expect(screens[2]?.startServerMsEstimated).toBe((screens[0]?.startServerMsEstimated ?? 0) + 180_000);
+  });
 });
 
 describe("chunk intake with resume", () => {

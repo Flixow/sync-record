@@ -43,6 +43,8 @@ export interface SceneParams {
    * side by side) or the last active speaker ("keep"). With a screen the last speaker's camera always stays.
    */
   fallback: "wide" | "keep";
+  /** "off": the screen is never featured (every screen track is ignored while there is a camera to show); absent: screens are featured while they are shared. */
+  screen?: "off";
 }
 
 export const DEFAULT_SCENE_PARAMS: SceneParams = { minDwellMs: 2500, hysteresisDb: 4, hangoverMs: 600, rhythm: "balanced", layout: "solo", fallback: "keep" };
@@ -254,6 +256,51 @@ function mergeScenes(scenes: Scene[]): Scene[] {
   return out;
 }
 
+/** A stretch of the project timeline in which one screen is featured. */
+export interface ShareInterval {
+  /** The screen source shown. */
+  id: string;
+  s: number;
+  e: number;
+}
+
+/**
+ * The stretches in which a screen is featured, sorted, without overlaps or gaps shorter than `SHARE_EDGE_MS`. Every screen
+ * track is one share (its `range`, or the whole recording without one; a range within a second of the recording's edge
+ * reaches it, as tracks start a few hundred ms apart). Where shares overlap, the one that started last is featured (a
+ * window shared after another is the one being talked about); a gap of a second or less between two shares is held by the
+ * earlier one, so a re-share does not flash the cameras.
+ */
+export function shareIntervals(screens: ActivityTrack[], durationMs: number): ShareInterval[] {
+  const shares = screens
+    .map((track) => {
+      const range = track.range;
+      const s = range && range.s > SHARE_EDGE_MS ? Math.max(0, range.s) : 0;
+      const e = range && range.e < durationMs - SHARE_EDGE_MS ? Math.min(durationMs, range.e) : durationMs;
+      return { id: track.id, s, e };
+    })
+    .filter((share) => share.e > share.s);
+  const bounds = [...new Set(shares.flatMap((share) => [share.s, share.e]))].sort((a, b) => a - b);
+  const pieces: ShareInterval[] = [];
+  for (let index = 0; index + 1 < bounds.length; index++) {
+    const from = bounds[index] as number;
+    const to = bounds[index + 1] as number;
+    // the active share that started last wins; of equal starts the later track
+    let featured: ShareInterval | null = null;
+    for (const share of shares) if (share.s <= from && share.e >= to && (featured === null || share.s >= featured.s)) featured = share;
+    if (featured === null) continue;
+    const last = pieces[pieces.length - 1];
+    if (last && last.id === featured.id && last.e >= from) last.e = to;
+    else pieces.push({ id: featured.id, s: from, e: to });
+  }
+  for (let index = 0; index + 1 < pieces.length; index++) {
+    const piece = pieces[index] as ShareInterval;
+    const next = pieces[index + 1] as ShareInterval;
+    if (next.s - piece.e <= SHARE_EDGE_MS) piece.e = next.s;
+  }
+  return pieces;
+}
+
 /**
  * Active speaker switching. The cameras are the speakers; speech comes from `speechFrames` of src/shared/vad.ts, so a
  * quiet copy of one voice on another's microphone is not that person talking. In order:
@@ -265,39 +312,54 @@ function mergeScenes(scenes: Scene[]): Scene[] {
  *  3. "nobody" and "several at once" become a wide scene or hold the last speaker (`fallback`);
  *  4. the shortest scene below the dwell (`effectiveMinDwellMs`) joins its longer neighbour, until none is left.
  * The scene list covers [0, durationMs] with no gaps or overlaps, is deterministic, and no scene is shorter than the
- * dwell unless the whole recording is. While a screen is shared (a screen track without `range`: the whole recording;
- * with `range`: that stretch) the layout is screen-camera with the screen first and only the camera beside it follows the
- * speaker, and outside a `range` the cameras follow the speaker on their own; when no switching can change the picture (one camera, side by
- * side, grid) the result is a single scene.
+ * dwell unless the whole recording is. A screen is featured during its share (`shareIntervals`: a screen track without
+ * `range` is shared for the whole recording, one with `range` for that stretch, several screens one after another): the
+ * layout is screen-camera with that share's screen first and only the camera beside it follows the speaker, and between
+ * shares the cameras follow the speaker on their own. `params.screen === "off"` ignores the screens altogether (unless
+ * there is no camera to show instead). When no switching can change the picture (one camera, side by side, grid) the
+ * result is a single scene per stretch.
  */
 export function planScenes(tracks: ActivityTrack[], durationMs: number, params: SceneParams, vad: VadOptions = DEFAULT_VAD): Scene[] {
   if (!(durationMs > 0) || tracks.length === 0) return [];
-  const screens = tracks.filter((track) => track.kind === "screen");
   const cameras = tracks.filter((track) => track.kind !== "screen");
-  const withScreen = screens.length > 0 && cameras.length > 0;
-  const share = screens[0]?.range;
-  // A share that starts or ends within a second of the recording's edge counts as reaching it (tracks start a few hundred ms apart).
-  const s = share && share.s <= SHARE_EDGE_MS ? 0 : Math.max(0, share?.s ?? 0);
-  const e = share && share.e >= durationMs - SHARE_EDGE_MS ? durationMs : Math.min(durationMs, share?.e ?? durationMs);
-  if (withScreen && share && (s > 0 || e < durationMs)) {
-    // The screen is shared for a part of the recording: the screen layout there, the speaker-led plan of the cameras elsewhere.
-    const cameraPlan = planScenes(cameras, durationMs, params, vad);
-    if (!(e > s)) return cameraPlan;
-    const sharePlan = planScenes(tracks.map((track) => (track.range ? { ...track, range: undefined } : track)), durationMs, params, vad);
-    const part = (scenes: Scene[], from: number, to: number): Scene[] => scenes.map((scene) => ({ ...scene, s: Math.max(scene.s, from), e: Math.min(scene.e, to) })).filter((scene) => scene.e > scene.s);
-    return mergeScenes([...part(cameraPlan, 0, s), ...part(sharePlan, s, e), ...part(cameraPlan, e, durationMs)]);
+  const screens = tracks.filter((track) => track.kind === "screen");
+  if (cameras.length === 0) return [{ s: 0, e: durationMs, layout: "solo", sources: screens.map((track) => track.id), ...(params.fit === undefined ? {} : { fit: params.fit }) }];
+  const shares = params.screen === "off" ? [] : shareIntervals(screens, durationMs);
+  const first = shares[0];
+  if (!first) return planStretch(cameras, undefined, durationMs, params, vad);
+  if (shares.length === 1 && first.s === 0 && first.e === durationMs) return planStretch(cameras, first.id, durationMs, params, vad);
+
+  // The screens are shared for parts of the recording: the screen layout there, the speaker-led plan of the cameras elsewhere.
+  const cameraPlan = planStretch(cameras, undefined, durationMs, params, vad);
+  const sharePlans = new Map<string, Scene[]>();
+  const part = (scenes: Scene[], from: number, to: number): Scene[] => scenes.map((scene) => ({ ...scene, s: Math.max(scene.s, from), e: Math.min(scene.e, to) })).filter((scene) => scene.e > scene.s);
+  const out: Scene[] = [];
+  let at = 0;
+  for (const share of shares) {
+    let plan = sharePlans.get(share.id);
+    if (!plan) {
+      plan = planStretch(cameras, share.id, durationMs, params, vad);
+      sharePlans.set(share.id, plan);
+    }
+    out.push(...part(cameraPlan, at, share.s), ...part(plan, share.s, share.e));
+    at = share.e;
   }
+  out.push(...part(cameraPlan, at, durationMs));
+  return mergeScenes(out);
+}
+
+/** The plan of the whole recording with at least one camera: with `screenId` it is featured throughout, without it there is no screen. */
+function planStretch(cameras: ActivityTrack[], screenId: string | undefined, durationMs: number, params: SceneParams, vad: VadOptions): Scene[] {
+  const withScreen = screenId !== undefined;
   const fit = params.fit === undefined ? {} : { fit: params.fit };
   const ids = cameras.map((track) => track.id);
-  const screenId = screens[0]?.id;
   const whole = (layout: LayoutId, sources: string[]): Scene[] => [{ s: 0, e: durationMs, layout, sources: [...sources], ...fit }];
   // without a screen to feature, screen-camera shows the cameras like a grid
   const baseLayout: LayoutId = params.layout === "screen-camera" && !withScreen ? "grid" : params.layout;
 
-  if (cameras.length === 0) return whole("solo", screens.map((track) => track.id));
   const showsEveryone = !withScreen && (baseLayout === "side-by-side" || baseLayout === "grid");
   if (cameras.length === 1 || showsEveryone) {
-    return whole(withScreen ? "screen-camera" : effectiveLayout(baseLayout, cameras.length), withScreen ? [screenId as string, ...ids] : ids);
+    return whole(withScreen ? "screen-camera" : effectiveLayout(baseLayout, cameras.length), withScreen ? [screenId, ...ids] : ids);
   }
 
   const frames = Math.ceil(durationMs / LEVEL_FRAME_MS);
@@ -315,7 +377,7 @@ export function planScenes(tracks: ActivityTrack[], durationMs: number, params: 
     const e = Math.min(run.e * LEVEL_FRAME_MS, durationMs);
     if (run.label === WIDE) return { s, e, layout: effectiveLayout("grid", cameras.length), sources: [...ids], ...fit };
     const order = [ids[run.label] as string, ...ids.filter((_, index) => index !== run.label)];
-    if (withScreen) return { s, e, layout: "screen-camera", sources: [screenId as string, ...order], ...fit };
+    if (withScreen) return { s, e, layout: "screen-camera", sources: [screenId, ...order], ...fit };
     return { s, e, layout: effectiveLayout(baseLayout, cameras.length), sources: order, ...fit };
   };
   return mergeScenes(runs.map(sceneOf));
@@ -439,7 +501,7 @@ export function setParams(plan: ScenePlan, patch: Partial<SceneParams>): ScenePl
 }
 
 const sameParams = (a: SceneParams, b: SceneParams): boolean =>
-  a.minDwellMs === b.minDwellMs && a.hysteresisDb === b.hysteresisDb && a.hangoverMs === b.hangoverMs && a.rhythm === b.rhythm && a.layout === b.layout && a.fit === b.fit && a.fallback === b.fallback;
+  a.minDwellMs === b.minDwellMs && a.hysteresisDb === b.hysteresisDb && a.hangoverMs === b.hangoverMs && a.rhythm === b.rhythm && a.layout === b.layout && a.fit === b.fit && a.fallback === b.fallback && a.screen === b.screen;
 
 export const samePlan = (a: ScenePlan, b: ScenePlan): boolean =>
   sameParams(a.params, b.params) && a.overrides.length === b.overrides.length && a.overrides.every((override, index) => sameOverride(override, b.overrides[index] as SceneOverride));
