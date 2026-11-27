@@ -1,4 +1,4 @@
-import { LAYOUT_IDS, type Aspect, type Background, type Fit, type LayoutId } from "../../shared/layout.js";
+import { cardParticipantId, LAYOUT_IDS, type Aspect, type Background, type Fit, type LayoutId } from "../../shared/layout.js";
 import type { ProjectFile } from "../../shared/project.js";
 import { REASON_TEXT } from "../../shared/clips.js";
 import type { Span } from "../../shared/scene-plan.js";
@@ -60,6 +60,12 @@ export function layoutPanel(api: ProjectApi, stg: Stage, project: ProjectFile, f
 
   // ---- the preview, above the player ---------------------------------------------------------------------------------
   const sources: PreviewSource[] = state.sources.map((source) => {
+    const cardOf = cardParticipantId(source.id);
+    if (source.kind === "card" && cardOf !== null) {
+      // a participant with a microphone and no camera: a name card, labelled like the microphone track of the timeline
+      const name = project.participants.find((participant) => participant.id === cardOf)?.name ?? cardOf;
+      return { ...source, name: `${name} · ${t("rec.track.audio")}`, video: null, card: name };
+    }
     const own = project.sources.find((item) => item.id === source.id);
     const owner = own ? `${own.participantName}${source.kind === "screen" ? ` · ${t("rec.track.screen")}` : ""}${own.segment > 1 ? ` #${own.segment}` : ""}` : source.id;
     return { ...source, name: owner, video: own?.video ? api.mediaUrl(own.video.file) : null };
@@ -282,6 +288,7 @@ export function layoutPanel(api: ProjectApi, stg: Stage, project: ProjectFile, f
   // ---- a suggested plan -------------------------------------------------------------------------------------------------
   let gone = false;
   const sugLlm = h("input", { type: "checkbox", "data-testid": "pj-lay-suggest-llm" });
+  sugLlm.checked = settings.llm;
   const sugButton = h("button", { type: "button", class: "btn btn-small", "data-testid": "pj-lay-suggest", onclick: () => void suggest() }, t("pj.lay.sug"));
   const sugHost = h("div", { class: "stack", "data-testid": "pj-lay-suggest-result" });
 
@@ -328,7 +335,7 @@ export function layoutPanel(api: ProjectApi, stg: Stage, project: ProjectFile, f
     }
   }
 
-  const needsProxies = sources.some((source) => source.video === null);
+  const needsProxies = sources.some((source) => source.video === null && source.card === undefined);
   const el = h(
     "div",
     { class: "stack", tabindex: -1, "data-testid": "pj-layout" },

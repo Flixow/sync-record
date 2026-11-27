@@ -66,12 +66,33 @@ export function canvasFor(aspect: Aspect, longEdge?: number): Canvas {
   return { width: Math.max(2, evenNear(full.width * scale)), height: Math.max(2, evenNear(full.height * scale)) };
 }
 
-/** The size of a source picture and what it shows. */
+/**
+ * The size of a source picture and what it shows. A "card" stands for a participant who recorded a microphone and no
+ * camera: it has no recording to crop, the preview draws a name card and the renderer generates one at the size of the
+ * tile (so its text stays sharp on any canvas). A card is a speaker like a camera and takes part in every layout.
+ */
 export interface LayoutSource {
   id: string;
-  kind: "camera" | "screen";
+  kind: "camera" | "screen" | "card";
   width: number;
   height: number;
+}
+
+/** Prefix of the source id of the name card of a participant who has a microphone and no camera: `card-<participant id>` (a valid scene override id, see ID_PATTERN). */
+export const CARD_PREFIX = "card-";
+/** The nominal picture size of a card (16:9); the tile it fills decides the real one. */
+export const CARD_SIZE = { width: 1280, height: 720 } as const;
+
+export const cardSourceId = (participantId: string): string => `${CARD_PREFIX}${participantId}`;
+
+/** The participant a card id stands for, or null when `id` is not a card id. */
+export const cardParticipantId = (id: string): string | null => (id.startsWith(CARD_PREFIX) && id.length > CARD_PREFIX.length ? id.slice(CARD_PREFIX.length) : null);
+
+/** Up to two capital letters for the avatar of a name card: the first letters of the first and last word ("Michał Rowiński" gives "MR"). */
+export function initialsOf(name: string): string {
+  const words = name.split(/[^\p{L}\p{N}]+/u).filter((word) => word !== "");
+  const letters = [words[0], words.length > 1 ? words[words.length - 1] : undefined].flatMap((word) => (word ? [Array.from(word)[0] as string] : []));
+  return letters.length === 0 ? "?" : letters.join("").toLocaleUpperCase();
 }
 
 export interface Tile {
@@ -158,7 +179,7 @@ const centred = (start: number, outer: number, len: number): number => start + e
 function pick(layout: LayoutId, sources: LayoutSource[]): { layout: LayoutId; picked: LayoutSource[] } {
   if (layout === "screen-camera") {
     const screen = sources.find((source) => source.kind === "screen");
-    const camera = sources.find((source) => source.kind === "camera");
+    const camera = sources.find((source) => source.kind !== "screen");
     if (screen && camera) return { layout, picked: [screen, camera] };
     if (screen) return { layout: "solo", picked: [screen] };
     // no screen to feature: show the cameras next to each other
@@ -261,6 +282,10 @@ export function computeTiles(input: LayoutInput): { tiles: Tile[]; background: B
   const { layout, picked } = pick(input.layout, input.sources);
   const tiles = boxes(layout, picked, input.canvas, gap).map((placed): Tile => {
     const source = placed.source;
+    // a card has no recording behind it: it is drawn at exactly the size of its box, so nothing is cropped or letterboxed
+    if (source.kind === "card") {
+      return { sourceId: source.id, x: placed.x, y: placed.y, w: placed.w, h: placed.h, fit: "fill", crop: { x: 0, y: 0, w: placed.w, h: placed.h }, sourceSize: { w: placed.w, h: placed.h }, z: placed.z };
+    }
     const fit: Fit = input.fit ?? (source.kind === "screen" ? "fit" : "fill");
     const sw = evenDown(source.width);
     const sh = evenDown(source.height);

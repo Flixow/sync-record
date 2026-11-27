@@ -7,7 +7,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createLlmClient, rerankWithLlm } from "../src/server/post/llm.js";
+import { createLlmClient } from "../src/server/post/llm.js";
+import { agentClips } from "../src/server/post/shorts-agent.js";
 import { chaptersForYoutube, formatChapters, segmentTopics, validateChapters, type Chapter } from "../src/shared/chapters.js";
 import { clipText, clipToEdl, normalizeWords, REASON_TEXT, suggestClips, type ClipSuggestion } from "../src/shared/clips.js";
 import { keptDuration, normalize, type Edl } from "../src/shared/edl.js";
@@ -143,7 +144,6 @@ result.s6b = { files: [path.join(tmp, "s6-top5-en.md"), path.join(tmp, "s6-top5-
 const off = createLlmClient({ url: null, model: "none", timeoutMs: 30_000 });
 const base = loaded["en-clean"];
 const heuristic = suggestClips({ words: base.transcript.words, levels: base.levels, durationMs: base.project.durationMs, limit: 10 });
-const reranked = await rerankWithLlm(heuristic, base.transcript.words, off);
 const markerAt = 333_000;
 const marked = suggestClips({ words: base.transcript.words, levels: base.levels, highlights: [{ tMs: markerAt }], durationMs: base.project.durationMs, limit: 10 });
 const plain = suggestClips({ words: base.transcript.words, durationMs: base.project.durationMs, limit: 10 });
@@ -151,7 +151,7 @@ const big = script(Array.from({ length: 2800 }, (_, index): Line => ({ pid: inde
 const bigStarted = performance.now();
 const bigClips = suggestClips({ words: big.words, durationMs: big.endMs });
 result.s6d = {
-  llmOffIsIdentity: reranked === heuristic,
+  agentOffMakesNoRequest: (await agentClips(off, { words: base.transcript.words, durationMs: base.project.durationMs })).failure === "disabled",
   llmEnabled: off.enabled,
   markerWindowFirstWithMarkerReason: marked[0]?.reasons[0] === "marker" && (marked[0]?.s ?? Infinity) <= markerAt && (marked[0]?.e ?? 0) >= markerAt,
   withLevelsVsWithout: { sameFirst: plain[0]?.id === heuristic[0]?.id, withLevelsTop3: heuristic.slice(0, 3).map((clip: ClipSuggestion) => [clip.s, clip.e, clip.score]), withoutTop3: plain.slice(0, 3).map((clip: ClipSuggestion) => [clip.s, clip.e, clip.score]) },

@@ -7,6 +7,7 @@ import {
   computeTiles,
   containSize,
   DEFAULT_BACKGROUND,
+  initialsOf,
   effectiveLayout,
   LAYOUT_CAPACITY,
   LAYOUT_IDS,
@@ -501,5 +502,43 @@ describe("layout ids", () => {
   it("lists the five layouts with a capacity each", () => {
     expect([...LAYOUT_IDS].sort()).toEqual(["grid", "screen-camera", "side-by-side", "solo", "speaker-thumbs"]);
     for (const layout of LAYOUT_IDS as readonly LayoutId[]) expect(LAYOUT_CAPACITY[layout]).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("name cards", () => {
+  const card = (id: string): LayoutSource => ({ id, kind: "card", width: 1280, height: 720 });
+  const canvas = CANVASES["9:16"];
+
+  it("fills its tile exactly, whatever the layout or the fit, so the renderer draws it at the size of the box", () => {
+    for (const layout of LAYOUT_IDS) {
+      for (const fit of ["fill", "fit"] as const) {
+        const { tiles } = computeTiles({ layout, canvas, sources: [card("c"), camera("a")], fit });
+        const tile = tiles.find((item) => item.sourceId === "c");
+        expect(tile, layout).toBeDefined();
+        expect(tile?.fit).toBe("fill");
+        expect(tile?.crop).toEqual({ x: 0, y: 0, w: tile?.w, h: tile?.h });
+        expect(tile?.sourceSize).toEqual({ w: tile?.w, h: tile?.h });
+      }
+    }
+  });
+
+  it("counts as a speaker next to a screen: the screen with the card beside it, not the screen alone", () => {
+    const { tiles } = computeTiles({ layout: "screen-camera", canvas: CANVASES["16:9"], sources: [screen("s"), card("c")] });
+    expect(tiles.map((tile) => tile.sourceId).sort()).toEqual(["c", "s"]);
+  });
+
+  it("is the whole picture when it is alone", () => {
+    const { tiles } = computeTiles({ layout: "solo", canvas: CANVASES["16:9"], sources: [card("c")] });
+    expect(tiles).toHaveLength(1);
+    expect([tiles[0]?.w, tiles[0]?.h]).toEqual([1920, 1080]);
+  });
+});
+
+describe("initialsOf", () => {
+  it("takes the first letter of the first and the last word, in capitals", () => {
+    expect(initialsOf("Michał Rowiński")).toBe("MR");
+    expect(initialsOf("anna maria nowak")).toBe("AN");
+    expect(initialsOf("Łukasz")).toBe("Ł");
+    expect(initialsOf("  ")).toBe("?");
   });
 });

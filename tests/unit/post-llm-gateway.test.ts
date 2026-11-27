@@ -222,6 +222,23 @@ describe.runIf(hasFfmpeg())("project API through a fake gateway", () => {
     expect(after.plan.overrides).toEqual(before.plan.overrides);
   });
 
+  it("uses the model for the scene plan, the clips and the publish draft when the request does not say, and makes no request with llm: false", async () => {
+    gateway.calls.length = 0;
+    const scene = (await api(server, "POST", url("/scenes/suggest"), { token, json: {} })).body as { source: string };
+    const draft = (await api(server, "POST", url("/publish/draft"), { token, json: { language: "en" } })).body as { llmUsed: boolean };
+    await api(server, "POST", url("/clips/suggest"), { token, json: { limit: 3 } });
+    expect(scene.source).toBe("llm");
+    expect(draft.llmUsed).toBe(true);
+    // the scene plan, the chapter titles, the draft and the clips: at least one request each
+    expect(gateway.calls.length).toBeGreaterThanOrEqual(4);
+    const calls = gateway.calls.length;
+    const optedOut = (await api(server, "POST", url("/scenes/suggest"), { token, json: { llm: false } })).body as { source: string };
+    expect(optedOut.source).toBe("rules");
+    expect(((await api(server, "POST", url("/publish/draft"), { token, json: { language: "en", llm: false } })).body as { llmUsed: boolean }).llmUsed).toBe(false);
+    await api(server, "POST", url("/clips/suggest"), { token, json: { limit: 3, llm: false } });
+    expect(gateway.calls.length).toBe(calls);
+  });
+
   it("falls back to the rules, with a reason code, when the gateway refuses, is overloaded, answers rubbish or is gone", async () => {
     const check = async (expectedFailure: string): Promise<void> => {
       const scene = (await api(server, "POST", url("/scenes/suggest"), { token, json: { llm: true } })).body as { source: string; overrides: unknown[]; llmFailure: string | null; llmAvailable: boolean };
@@ -246,14 +263,14 @@ describe.runIf(hasFfmpeg())("project API through a fake gateway", () => {
     await check("network");
   });
 
-  it("without a configured model, or without the request asking for it, makes no request and still gives the rule-based lists", async () => {
+  it("without a configured model, or with llm: false, makes no request and still gives the rule-based lists", async () => {
     gateway = await fakeGateway();
     const calls = gateway.calls.length;
     const scene = (await api(off, "POST", url("/scenes/suggest"), { token, json: { llm: true } })).body as { source: string; overrides: unknown[]; highlights: { reason: string }[]; cuts: { s: number; e: number; reason: string }[]; llmAvailable: boolean; llmFailure: string | null };
     expect(scene).toMatchObject({ source: "rules", overrides: [], llmAvailable: false, llmFailure: null });
     expect(scene.highlights.length).toBeGreaterThan(0);
     for (const cut of scene.cuts) expect(cut.e - cut.s).toBeGreaterThanOrEqual(4000);
-    const unasked = (await api(server, "POST", url("/scenes/suggest"), { token, json: {} })).body as { source: string; llmAvailable: boolean };
+    const unasked = (await api(server, "POST", url("/scenes/suggest"), { token, json: { llm: false } })).body as { source: string; llmAvailable: boolean };
     expect(unasked).toMatchObject({ source: "rules", llmAvailable: true });
     expect(gateway.calls.length).toBe(calls);
     expect((await readFile(path.join(off.dir, "post", SID, "transcript.json"), "utf8")).length).toBeGreaterThan(0);

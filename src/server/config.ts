@@ -2,7 +2,7 @@ import path from "node:path";
 import { readFileSync } from "node:fs";
 import { DEFAULT_CALL_TOKEN_TTL_SECONDS, livekitOrigins, type LivekitSettings } from "./livekit.js";
 import { telemetryOrigin, type TelemetrySettings } from "./telemetry.js";
-import { DEFAULT_LLM_TIMEOUT_MS, LLM_PROVIDER_NAMES, llmTransport, type LlmProviderName, type LlmSettings } from "./post/llm.js";
+import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_ANTHROPIC_URL, DEFAULT_LLM_TIMEOUT_MS, DEFAULT_SHORTS_TIMEOUT_MS, LLM_PROVIDER_NAMES, llmTransport, type LlmProviderName, type LlmSettings } from "./post/llm.js";
 
 export type StorageDriverName = "local" | "s3";
 
@@ -97,15 +97,18 @@ function number(env: Env, key: string, fallback: number, min: number, max: numbe
 }
 
 /**
- * The language model settings; null when `LLM_URL` is empty. A key comes from `LLM_API_KEY` or from the file `LLM_API_KEY_FILE`
- * (a Docker or Kubernetes secret), never both. A key is only ever sent over https or a path that is encrypted anyway.
+ * The language model settings; null when no model is configured: `LLM_URL` is empty, or (`LLM_PROVIDER=anthropic`) there is no
+ * key. A key comes from `LLM_API_KEY` or from the file `LLM_API_KEY_FILE` (a Docker or Kubernetes secret), never both; for
+ * `anthropic` `ANTHROPIC_API_KEY` is the last resort. Only `anthropic` can be on without `LLM_URL` (it is then the Anthropic
+ * API, https://api.anthropic.com). A key is only ever sent over https or a path that is encrypted anyway.
  */
 function loadLlm(env: Env): LlmSettings | null {
-  const url = text(env, "LLM_URL");
-  if (url === undefined) return null;
+  const providerRaw = text(env, "LLM_PROVIDER") ?? "openai-compatible";
+  const urlRaw = text(env, "LLM_URL");
+  if (urlRaw === undefined && providerRaw !== "anthropic") return null;
+  const url = urlRaw ?? DEFAULT_ANTHROPIC_URL;
   const transport = llmTransport(url);
   if (transport === null) throw new Error("LLM_URL must be an http or https URL");
-  const providerRaw = text(env, "LLM_PROVIDER") ?? "openai-compatible";
   if (!(LLM_PROVIDER_NAMES as readonly string[]).includes(providerRaw)) throw new Error(`LLM_PROVIDER must be one of ${LLM_PROVIDER_NAMES.join(", ")}`);
   const provider = providerRaw as LlmProviderName;
   const keyFile = text(env, "LLM_API_KEY_FILE");
@@ -118,13 +121,25 @@ function loadLlm(env: Env): LlmSettings | null {
       throw new Error("LLM_API_KEY_FILE cannot be read");
     }
   }
+  if (provider === "anthropic") {
+    apiKey ??= text(env, "ANTHROPIC_API_KEY") ?? null;
+    // no key, no request: the model stays off and every feature keeps its built-in rules
+    if (apiKey === null) return null;
+  }
   const model = text(env, "LLM_MODEL");
   if (provider === "omp-gateway") {
     if (apiKey === null) throw new Error("LLM_PROVIDER=omp-gateway needs LLM_API_KEY or LLM_API_KEY_FILE (the gateway client token)");
     if (model === undefined) throw new Error("LLM_PROVIDER=omp-gateway needs LLM_MODEL (a provider/model id or a role such as @smol)");
   }
-  if (apiKey !== null && !transport.protectedPath) throw new Error("LLM_API_KEY would be sent unencrypted: use an https LLM_URL, a loopback or Tailscale address");
-  return { url, model: model ?? "default", timeoutMs: integer(env, "LLM_TIMEOUT_MS", DEFAULT_LLM_TIMEOUT_MS, 1000, 600_000), provider, apiKey };
+  if (apiKey !== null && !transport.protectedPath) throw new Error("the model key would be sent unencrypted: use an https LLM_URL, a loopback or Tailscale address");
+  return {
+    url,
+    model: model ?? (provider === "anthropic" ? DEFAULT_ANTHROPIC_MODEL : "default"),
+    timeoutMs: integer(env, "LLM_TIMEOUT_MS", DEFAULT_LLM_TIMEOUT_MS, 1000, 600_000),
+    shortsTimeoutMs: integer(env, "SHORTS_TIMEOUT_MS", DEFAULT_SHORTS_TIMEOUT_MS, 1000, 600_000),
+    provider,
+    apiKey,
+  };
 }
 
 /** Reads the whole configuration from environment variables. Throws a readable error when it is unusable. */

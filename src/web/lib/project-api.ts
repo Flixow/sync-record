@@ -88,10 +88,14 @@ export interface ClipsFile {
 
 export interface ClipSuggestions {
   suggestions: ClipSuggestion[];
-  /** The language model re-ranked the list. */
+  /** Who cut the list: the language model ("agent") or the built-in rules ("rule", also when the model failed). */
+  source: "agent" | "rule";
+  /** The language model cut the list. */
   llmUsed: boolean;
   /** The host configured a language model. */
   llmAvailable: boolean;
+  /** Why the model's answer was not used ("http_401", "timeout", "not_json", "no_valid_reels", ...); null when it was used or not asked. */
+  llmFailure: string | null;
 }
 
 export interface ChapterValidation {

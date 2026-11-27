@@ -40,8 +40,9 @@ directory or any S3-compatible bucket you choose.
   published anywhere by SyncRecord.
 - Optional conversation in the page on LiveKit (join, mute, camera, leave, a grid of participants), **off by default**
   (`LIVEKIT_URL` and keys, see [Conversation](#conversation-optional)). Recording stays local and independent of it.
-- Optional extras, all **off by default**: a language-model provider (`LLM_URL`; clip ranking, chapter titles, title
-  drafts and a model-driven scene plan, see [Optional language model](#optional-language-model)) and server-side
+- Optional extras, both **off until configured**: a language-model provider (`LLM_URL`, or `LLM_PROVIDER=anthropic` with a key; the
+  clips cut by the model, chapter titles, title drafts and a model-driven scene plan, see
+  [Optional language model](#optional-language-model); the transcript text leaves the machine when it is on) and server-side
   telemetry to your own PostHog (`POSTHOG_KEY` and `POSTHOG_HOST`, see [Telemetry](#telemetry)).
 - Host access across browsers: the host's project page can be opened elsewhere with a one-time claim link (see
   [Limits and honest notes](#limits-and-honest-notes)).
@@ -116,14 +117,16 @@ Everything is read from the environment (see `.env.example`). Nothing is hardcod
 | `ASR_PYTHON` | `python3` | A Python with `faster-whisper` installed (`pip install faster-whisper`; the Docker image has it); the transcript job runs it as a child process. |
 | `ASR_MODEL` | unset (chosen by memory) | faster-whisper model. Unset: `deepdml/faster-whisper-large-v3-turbo-ct2` with 3 GiB or more, `small` from 2 GiB, `base` from 600 MiB, with a fall back to the next smaller one when the system kills the process for memory. Set it to pin a model; `small` is a faster, less accurate choice (about 2.5x as fast; 17% instead of 7% word error rate on Polish). |
 | `ASR_COMPUTE_TYPE` | `int8` | CTranslate2 compute type of the model on the CPU: `int8`, `int8_float32`, `int16`, `float32`, `auto`, ... (an unsupported one fails the transcript job). |
-| `LLM_URL` | empty | Optional chat-completions endpoint (base URL of an OpenAI-compatible server) for the language-model features: clip re-ranking, chapter titles, title and description drafts, scene-plan suggestions. Empty = off, and every feature works without it. See [Optional language model](#optional-language-model). |
-| `LLM_PROVIDER` | `openai-compatible` | `openai-compatible` (llama.cpp, Ollama, LiteLLM, OpenRouter, OpenAI, any server with `/v1/chat/completions`; key optional) or `omp-gateway` (an OMP auth gateway; key and model required). |
-| `LLM_MODEL` | `default` | Model name sent to the endpoint. Required for `omp-gateway` (`provider/model-id`). |
-| `LLM_API_KEY`, `LLM_API_KEY_FILE` | empty | Bearer key for the endpoint, from the environment or from a file (use the file with Docker/Kubernetes secrets); set at most one. Refused over plain `http://` unless the host is this machine, Docker's `host.docker.internal` or a Tailscale address. |
+| `LLM_URL` | empty | Optional endpoint (base URL of an OpenAI-compatible server, or of an Anthropic API gateway) for the language-model features: clip cutting, chapter titles, title and description drafts, scene-plan suggestions. Empty = off (except `LLM_PROVIDER=anthropic` with a key, which uses `https://api.anthropic.com`), and every feature works without it. See [Optional language model](#optional-language-model). |
+| `LLM_PROVIDER` | `openai-compatible` | `openai-compatible` (llama.cpp, Ollama, LiteLLM, OpenRouter, OpenAI, any server with `/v1/chat/completions`; key optional), `omp-gateway` (an OMP auth gateway; key and model required) or `anthropic` (the Anthropic Messages API; on only with a key). |
+| `LLM_MODEL` | `default`; `claude-opus-5-5` for `anthropic` | Model name sent to the endpoint. Required for `omp-gateway` (`provider/model-id`). The Opus id is from Anthropic's release notes and not yet confirmed by a request; set this if it is wrong. |
+| `LLM_API_KEY`, `LLM_API_KEY_FILE` | empty | Key for the endpoint (`Authorization: Bearer`; `x-api-key` for `anthropic`), from the environment or from a file (use the file with Docker/Kubernetes secrets); set at most one. Refused over plain `http://` unless the host is this machine, Docker's `host.docker.internal` or a Tailscale address. Never logged, never sent to the browser, never written to a job file. |
+| `ANTHROPIC_API_KEY` | empty | The key of `LLM_PROVIDER=anthropic` when `LLM_API_KEY` and `LLM_API_KEY_FILE` are not set. Ignored by every other provider. Without a key the model stays off and no request is ever made. |
 | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | empty | Optional in-page conversation on a LiveKit server you run (or LiveKit Cloud). All three or none; off when none is set. `LIVEKIT_URL` is the public `wss://` signalling URL without a path (`ws://` only for localhost); the secret must be at least 32 characters. See [Conversation](#conversation-optional). |
 | `LIVEKIT_TOKEN_TTL_SECONDS` | `600` | Lifetime of a call token, 60 to 3600. A token is needed only to connect; the LiveKit server refreshes it for a connected client. |
 | `POSTHOG_KEY`, `POSTHOG_HOST` | empty | Optional telemetry to a PostHog instance you operate. Off unless both are set; see [Telemetry](#telemetry). |
 | `LLM_TIMEOUT_MS` | `60000` | Per-request timeout, 1000 to 600000. A timeout counts as a failure: the built-in rules answer instead. |
+| `SHORTS_TIMEOUT_MS` | `120000` | Timeout of the one request that cuts clips (the shorts agent), 1000 to 600000: its prompt holds a whole transcript and Opus may think first. A timeout falls back on the rule-based clips. |
 | `WEB_DIR` | `./dist/web` | Built web client. |
 
 ## Output
@@ -224,7 +227,10 @@ the picture. On 9:16 every picture stays inside the safe area, clear of the plat
 speaker** switching follows who is talking on their own microphone (a voice that only leaks into someone else's
 microphone does not count), with a minimum time on screen, hysteresis, a short hold after speech ends, and a rhythm
 (calm, balanced, lively). Manual scene edits are layered over the automatic ones, are saved separately (`scenes.json`) and
-can be undone or cleared.
+can be undone or cleared. A participant who recorded a microphone and no camera (a phone call, a guest with the camera
+off) is a speaker like any other: their voice drives the switching and the scene list offers them as a source. Their
+picture is a **name card** (a round avatar with the initials, the name under it) that the preview draws and the render
+generates at the size of its tile, so it needs no video; their microphone is mixed into the program like every track.
 
 On the project page the **Layout** section drives a live preview above the player. It draws the layout engine's own
 geometry (the same percentages the render derives its crops from) with the 480p proxies and keeps every picture in step
@@ -272,23 +278,50 @@ find the file in the exports list. The **Export** panel gains burned-in captions
 background noise); every option is off by default, and the noise model is downloaded only when you ask for it. The
 **Publish** panel shows the chapters with YouTube's rules checked and a copy button, the title and description draft, and a
 thumbnail picker (moment, video or Short shape, optional text) that ends with a picture you can download. The "language model"
-boxes of Clips and Publish, and the scene-plan box of the layout editor, are off by default and only act when `LLM_URL` is set.
+boxes of Clips and Publish, and the scene-plan box of the layout editor, are ticked by default when a model is configured (`LLM_URL`, or `LLM_PROVIDER=anthropic` with a key) and do nothing without one; untick a box to use the built-in rules for that request.
 
 ### Optional language model
 
-Off unless `LLM_URL` is set, and then used only for the request that ticks the box. Four things use it, each with a
-built-in fallback: re-ranking and titling clips, retitling the chapters (start times and count never change), the title
-and description draft, and a **scene-plan suggestion** (layout per stretch of the recording). Any failure (refused,
-timeout, overload, an answer that does not validate) returns the built-in result and a short reason; nothing is retried.
+Off unless a model is configured: `LLM_URL` is set, or `LLM_PROVIDER=anthropic` with a key. It is then used only for the
+request whose box is ticked (all boxes start ticked; an API request that omits `llm` uses the model too, `llm: false` opts out). Four things use it, each with a built-in fallback: **cutting the clips** (the shorts agent,
+below), retitling the chapters (start times and count never change), the title and description draft, and a
+**scene-plan suggestion** (layout per stretch of the recording). Any failure (refused, timeout, overload, an answer that
+does not validate) returns the built-in result and a short reason; nothing is retried.
 
-What the model receives: transcript text and, for the scene plan, a few numbers per stretch (speech, overlap and silence
-share, loudness, speaker changes, screen share yes/no). Never audio, video or frames. When `LLM_URL` is not on this
-machine, the boxes say that the transcript leaves it; point it only at a service you may send it to.
+What the model receives: transcript text and timings and, for the scene plan, a few numbers per stretch (speech, overlap and
+silence share, loudness, speaker changes, screen share yes/no). Never audio, video or frames. **The transcript text leaves
+this machine whenever the provider is not on it** (`anthropic`, or an `LLM_URL` that is not loopback or the Docker host); the
+boxes say so. Point it only at a service you may send it to.
 
 The model chooses from a fixed list per stretch (never timestamps) and its layouts are written as ordinary scene overrides
 in one undoable step, so the plan stays hand-editable. Highlights and cut suggestions are only listed, never applied.
 Transition types are not part of the editor (the renderer makes hard cuts), so none are suggested. Without a model the
 same button gives no layout changes and lists long silences as cut candidates and the clip suggestions as highlights.
+
+#### The shorts agent (clips cut by the model)
+
+With a model configured, the **Clips** panel's "Let the language model cut the clips" box makes **Suggest clips** ask the
+model to cut the clips instead of the built-in rules (`suggestClips`). One click is one request; nothing is called
+automatically. The model reads the transcript and proposes up to 5 reels (`count`, at most 10), each with a start, an end, a
+title, a hook (the opening line), a reason and a score. The code never trusts the answer: every reel is snapped to sentence
+boundaries (its start to the nearest sentence start, its end to the nearest sentence end), clamped to 20-90 seconds
+(a longer one ends at the last sentence that fits, a shorter one grows by whole sentences; when the recording has none
+such, as in a recording with little speech, it is padded with silence up to but never over the neighbouring words), refused when it lies outside the
+recording, has no title, has fewer than 6 words or 5 seconds of speech, or holds a silence of 10 seconds; overlapping reels (more than 20 % of the shorter), repeated ranges and repeated titles are dropped and the best
+by the model's score stay. The cards say **Cut by model** or **Cut by rule** and show the hook and reason of a model clip.
+
+If the model fails, answers with something that is not JSON, or none of its reels is valid, the rules cut the clips as
+before; the page says so and the response carries `source: "rule"` and the reason in `llmFailure` (`http_401`, `timeout`,
+`not_json`, `bad_shape`, `no_valid_reels`, ...). Without a model or a key, no request is made and the rule path runs unchanged.
+
+What the model receives for the shorts: the transcript **text** and its timings only, one line per sentence
+(`startMs-endMs S1: text`, speakers anonymised as S1, S2, never names), the moments flagged while recording (`M @ ms`), the
+length of the recording and the limits. Never audio, video or frames. **With the `anthropic` provider (or any URL that is not on this
+machine) the transcript text leaves this machine for that service.** Token budget: the transcript part of the prompt is at most
+120 000 characters (about 40 000 tokens, a little over three hours of speech); a longer recording is shortened
+deterministically in this order, stopping at the first step that fits: reactions ("yeah") left out, sentences cut to 200
+characters, to 80, then every k-th sentence kept (sentences near a flagged moment always). The times of the lines that
+remain are never changed. `SHORTS_TIMEOUT_MS` (default 120000) bounds the one call, because Opus may think before it answers.
 
 Providers share one small interface (`LlmClient` in `src/server/post/llm.ts`: `enabled` and `rank(prompt)` returning
 parsed JSON or `null`). To add one, implement it and register it in `PROVIDERS`; for a service that speaks the OpenAI
@@ -298,6 +331,21 @@ chat-completions protocol you only need `LLM_URL`, `LLM_MODEL` and your own `LLM
 LLM_URL=https://api.openai.com
 LLM_MODEL=<model id of your choice>
 LLM_API_KEY_FILE=/run/secrets/llm_key
+```
+
+`anthropic` talks to the Anthropic Messages API (`POST /v1/messages`, headers `x-api-key` and `anthropic-version`). It
+needs no `LLM_URL` (the default is `https://api.anthropic.com`; set it to point at a gateway or proxy) but it does need a
+key, and it is never on by itself: it is on only with `LLM_PROVIDER=anthropic` **and** a key in `ANTHROPIC_API_KEY` (or
+`LLM_API_KEY` / `LLM_API_KEY_FILE`, which win). `LLM_MODEL` defaults to `claude-opus-5-5` (Opus 5.5, id taken from
+Anthropic's release notes of 2026-09-22 and not yet confirmed by a real request: set `LLM_MODEL` if it is wrong). No
+`temperature` is sent (current Opus models refuse sampling parameters) and the answer is read from the `text` blocks
+(a thinking block is skipped). Never put the key in the repository, in a job file or in the browser: it is read from the
+environment once and sent only as `x-api-key` to the configured URL; a redirect is refused.
+
+```sh
+LLM_PROVIDER=anthropic
+LLM_API_KEY_FILE=/run/secrets/anthropic_key   # or ANTHROPIC_API_KEY=... in the service's environment
+# optional: LLM_MODEL=claude-opus-5-5  SHORTS_TIMEOUT_MS=120000  LLM_URL=https://your-gateway.example
 ```
 
 `omp-gateway` talks to an OMP `auth-gateway` (`omp auth-gateway serve`) that holds provider credentials for

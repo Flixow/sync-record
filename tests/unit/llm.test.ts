@@ -2,12 +2,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { chaptersForYoutube } from "../../src/shared/chapters.js";
-import { suggestClips, type ClipSuggestion } from "../../src/shared/clips.js";
 import { draftTitleAndDescription } from "../../src/shared/publish.js";
-import { createLlmClient, HttpLlmClient, llmChapterTitles, llmDraft, llmTransport, rerankClips, rerankWithLlm, type LlmClient } from "../../src/server/post/llm.js";
+import { createLlmClient, HttpLlmClient, llmChapterTitles, llmDraft, llmTransport, type LlmClient } from "../../src/server/post/llm.js";
 import { script, SPEAKERS, type Line } from "../support/talk.js";
-
-const { A, B } = SPEAKERS;
 
 interface Seen {
   method: string | undefined;
@@ -75,9 +72,8 @@ const STATEMENTS = [
   "She keeps every old version in a folder named after the release.",
 ];
 
-const lines: Line[] = Array.from({ length: 80 }, (_, index) => ({ pid: index % 2 === 0 ? A : B, text: STATEMENTS[index % STATEMENTS.length] as string }));
+const lines: Line[] = Array.from({ length: 80 }, (_, index) => ({ pid: index % 2 === 0 ? SPEAKERS.A : SPEAKERS.B, text: STATEMENTS[index % STATEMENTS.length] as string }));
 const { words, endMs } = script(lines);
-const clips = suggestClips({ words, durationMs: endMs, limit: 4 });
 
 const timeoutMs = 2000;
 const client = (url: string | null): LlmClient => createLlmClient({ url, model: "test-model", timeoutMs });
@@ -89,8 +85,6 @@ describe("with no model configured", () => {
       const llm = client(url);
       expect(llm.enabled).toBe(false);
       expect(await llm.rank({ system: "s", user: "u" })).toBeNull();
-      expect(await rerankClips(llm, clips, words)).toBeNull();
-      expect(await rerankWithLlm(clips, words, llm)).toBe(clips);
       expect(await llmDraft(llm, { words, chapters: [], speakers: ["Anna"], language: "en" })).toBeNull();
     }
     expect(createLlmClient(null).enabled).toBe(false);
@@ -159,61 +153,100 @@ describe("the chat-completions client", () => {
   });
 });
 
-describe("re-ranking clips", () => {
-  const ids = clips.map((clip) => clip.id);
+const KEY = "sk-ant-test-key-not-real";
+const anthropicClient = (url: string | null, extra: Partial<Parameters<typeof createLlmClient>[0] & object> = {}): LlmClient => createLlmClient({ url, model: "test-opus", timeoutMs, provider: "anthropic", apiKey: KEY, ...extra });
 
-  it("orders by the model's rating, uses its titles and keeps what it left out after the rated ones", async () => {
-    const server = await fake(completion({ ratings: [{ id: ids[2], rating: 9, title: "  The migration that\nfinished overnight " }, { id: ids[0], rating: 4 }, { id: ids[3], rating: 9, title: "x".repeat(200) }, { id: "invented", rating: 10 }] }));
-    const result = await rerankWithLlm(clips, words, client(server.url));
-    expect(result.map((clip) => clip.id)).toEqual([ids[2], ids[3], ids[0], ids[1]]);
-    expect(result[0]?.title).toBe("The migration that finished overnight");
-    expect(result[1]?.title.length).toBeLessThanOrEqual(70);
-    expect(result[2]?.title).toBe(clips[0]?.title);
-    expect(result[0]).toEqual({ ...(clips[2] as ClipSuggestion), title: "The migration that finished overnight" });
+/** Answers like the Anthropic Messages API whose model said `text` (optionally after a thinking block). */
+const messageAnswer = (text: unknown, extra: Record<string, unknown> = {}) => (_request: Seen, response: ServerResponse) => {
+  response.setHeader("content-type", "application/json");
+  response.end(JSON.stringify({ id: "msg_test", type: "message", role: "assistant", model: "test-opus", content: [{ type: "thinking", thinking: "hmm" }, { type: "text", text: typeof text === "string" ? text : JSON.stringify(text) }], stop_reason: "end_turn", ...extra }));
+};
+
+describe("the Anthropic Messages client", () => {
+  it("posts to /v1/messages with x-api-key, the version header, system and one user message, and no sampling parameter", async () => {
+    const server = await fake(messageAnswer({ reels: [] }));
+    const llm = anthropicClient(server.url);
+    expect(llm.enabled).toBe(true);
+    expect(await llm.rank({ system: "be brief", user: "hello", maxTokens: 321 })).toEqual({ reels: [] });
+    expect(server.seen).toHaveLength(1);
+    const [request] = server.seen as [Seen];
+    expect(request.method).toBe("POST");
+    expect(request.url).toBe("/v1/messages");
+    expect(request.headers["x-api-key"]).toBe(KEY);
+    expect(request.headers["anthropic-version"]).toBe("2023-06-01");
+    expect(request.contentType).toBe("application/json");
+    expect(request.headers.authorization).toBeUndefined();
+    expect(JSON.parse(request.body)).toEqual({ model: "test-opus", max_tokens: 321 + 4096, system: "be brief", messages: [{ role: "user", content: "hello" }] });
   });
 
-  it("sends the text of the clips with neutral speaker labels, not participant ids", async () => {
-    const server = await fake(completion({ ratings: [{ id: ids[0], rating: 5 }] }));
-    await rerankClips(client(server.url), clips, words);
-    const sent = JSON.parse((server.seen[0] as Seen).body) as { messages: { role: string; content: string }[] };
-    const user = sent.messages[1]?.content as string;
-    for (const id of ids) expect(user).toContain(`### ${id}`);
-    expect(user).toContain("Speaker 1: ");
-    expect(user).toContain("Speaker 2: ");
-    expect(user).not.toContain(A);
-    expect(sent.messages[0]?.content).toContain("JSON");
+  it("asks for low effort only when the prompt does, and leaves room for thinking in max_tokens", async () => {
+    const server = await fake(messageAnswer({ ok: true }));
+    const llm = anthropicClient(server.url);
+    await llm.rank({ system: "s", user: "u", maxTokens: 100, effort: "low" });
+    const body = JSON.parse((server.seen.at(-1) as Seen).body) as { max_tokens: number; output_config?: { effort: string } };
+    expect(body).toMatchObject({ max_tokens: 100 + 4096, output_config: { effort: "low" } });
   });
 
-  it("asks about at most twelve clips and needs at least two", async () => {
-    const server = await fake(completion({ ratings: [{ id: ids[0], rating: 5 }] }));
-    expect(await rerankClips(client(server.url), clips.slice(0, 1), words)).toBeNull();
-    expect(server.seen).toHaveLength(0);
-    const many = suggestClips({ words, durationMs: endMs, limit: 15, minMs: 20_000, maxMs: 25_000 });
-    expect(many.length).toBeGreaterThan(12);
-    await rerankClips(client(server.url), many, words);
-    const user = (JSON.parse((server.seen[0] as Seen).body) as { messages: { content: string }[] }).messages[1]?.content as string;
-    expect(user.match(/^### /gm)?.length).toBeLessThanOrEqual(12);
+  it("reads the text blocks (a thinking block is skipped, a fence stripped) and accepts a base URL ending in /v1", async () => {
+    const server = await fake(messageAnswer('```json\n{"fenced": true}\n```'));
+    expect(await anthropicClient(`${server.url}/v1/`).rank({ system: "s", user: "u" })).toEqual({ fenced: true });
+    expect(server.seen[0]?.url).toBe("/v1/messages");
   });
 
-  it("keeps the heuristic result when the answer has the wrong shape or the call fails", async () => {
-    const bad: unknown[] = [
-      { ratings: "nope" },
-      { ratings: [{ id: ids[0], rating: 11 }] },
-      { ratings: [{ id: ids[0], rating: "high" }] },
-      { ratings: [{ id: ids[0], rating: 5, title: 7 }] },
-      { ratings: [{ rating: 5 }] },
-      { ratings: [] },
-      { ratings: [{ id: "invented", rating: 5 }] },
-      ["x"],
+  it("talks to api.anthropic.com and the Opus 5.5 model by default, and sends the key nowhere else", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ content: [{ type: "text", text: "{}" }], stop_reason: "end_turn" }), { status: 200 }));
+    const llm = createLlmClient({ provider: "anthropic", apiKey: KEY, url: null });
+    expect(llm.enabled).toBe(true);
+    await llm.rank({ system: "s", user: "u" });
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [url, init] = spy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.anthropic.com/v1/messages");
+    expect((JSON.parse(init.body as string) as { model: string }).model).toBe("claude-opus-5-5");
+  });
+
+  it("is off without a key and then makes no request", async () => {
+    const spy = vi.spyOn(globalThis, "fetch");
+    const llm = createLlmClient({ provider: "anthropic", apiKey: null, url: null });
+    expect(llm.enabled).toBe(false);
+    expect(await llm.rank({ system: "s", user: "u" })).toBeNull();
+    expect(llm.lastFailure).toBe("disabled");
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("resolves to null with a short code, never a body or the key, on every kind of failure", async () => {
+    const closed = await fake(messageAnswer({}));
+    await closed.close();
+    const cases: [string, string, (request: Seen, response: ServerResponse) => void][] = [
+      ["http_401", "an invalid key", (_request, response) => { response.statusCode = 401; response.end(JSON.stringify({ type: "error", error: { type: "authentication_error", message: `invalid x-api-key ${KEY}` } })); }],
+      ["http_529", "an overloaded API", (_request, response) => { response.statusCode = 529; response.end("{}"); }],
+      ["not_json", "an HTML page", (_request, response) => response.end("<html>")],
+      ["not_json", "text that is not JSON", messageAnswer("Sure! Here are your reels.")],
+      ["bad_shape", "no content list", (_request, response) => response.end(JSON.stringify({ content: "x" }))],
+      ["bad_shape", "only a thinking block", (_request, response) => response.end(JSON.stringify({ content: [{ type: "thinking", thinking: "..." }], stop_reason: "end_turn" }))],
+      ["bad_shape", "a text block without text", (_request, response) => response.end(JSON.stringify({ content: [{ type: "text" }], stop_reason: "end_turn" }))],
+      ["truncated", "an answer cut off by max_tokens", messageAnswer('{"reels":[{"startMs":1', { stop_reason: "max_tokens" })],
+      ["too_large", "a huge answer", (_request, response) => response.end(JSON.stringify({ content: [{ type: "text", text: "x".repeat(1_100_000) }] }))],
+      ["network", "a redirect", (_request, response) => { response.statusCode = 302; response.setHeader("location", "http://127.0.0.1:1/elsewhere"); response.end(); }],
     ];
-    for (const answer of bad) {
-      const server = await fake(completion(answer));
-      expect(await rerankWithLlm(clips, words, client(server.url)), JSON.stringify(answer)).toBe(clips);
+    for (const [code, name, answer] of cases) {
+      const server = await fake(answer);
+      const llm = anthropicClient(server.url);
+      expect(await llm.rank({ system: "s", user: "u" }), name).toBeNull();
+      expect(llm.lastFailure, name).toBe(code);
+      expect(JSON.stringify(llm.lastFailure)).not.toContain(KEY);
     }
-    const failing = await fake((_request, response) => { response.statusCode = 503; response.end(); });
-    expect(await rerankWithLlm(clips, words, client(failing.url))).toBe(clips);
-    const throwing: LlmClient = { enabled: true, rank: () => Promise.reject(new Error("boom")) };
-    expect(await rerankWithLlm(clips, words, throwing)).toBe(clips);
+    const gone = anthropicClient(closed.url);
+    expect(await gone.rank({ system: "s", user: "u" })).toBeNull();
+    expect(gone.lastFailure).toBe("network");
+  });
+
+  it("gives up after the per-call timeout, which replaces the client's", async () => {
+    const server = await fake(() => undefined);
+    const llm = anthropicClient(server.url, { timeoutMs: 30_000 });
+    const started = performance.now();
+    expect(await llm.rank({ system: "s", user: "u", timeoutMs: 150 })).toBeNull();
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(llm.lastFailure).toBe("timeout");
   });
 });
 
