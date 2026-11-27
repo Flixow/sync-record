@@ -8,19 +8,15 @@ import type { Config } from "../config.js";
 import { addExport } from "./exports.js";
 import { ffmpeg } from "./exec.js";
 import type { JobContext } from "./jobs.js";
-import { layoutSources, resolveScenes } from "./layout-plan.js";
+import { cardsOf, layoutSources, resolveScenes } from "./layout-plan.js";
 import type { ProjectStore } from "./projects.js";
-import { FONTS_DIR } from "./render.js";
-import { layoutVideoGraph } from "./render-layout.js";
+import { escapePath, FONTS_DIR, layoutVideoGraph } from "./render-layout.js";
 import { readScenes } from "./scenes-store.js";
 import type { JobRecord } from "../../shared/project.js";
 
 const FPS = 30;
 /** Decoding starts this long before the wanted frame: the keyframe the seek lands on is further back than that. */
 const LEAD_MS = 4000;
-
-/** `ffmpeg drawtext` value escaping (the text goes through a file, so only the path needs it). */
-const escapePath = (value: string): string => `'${value.replace(/\\/g, "\\\\").replace(/'/g, "'\\''").replace(/:/g, "\\:")}'`;
 
 /**
  * Thumbnail: one frame of the program (the scene plan's layout at that instant, at full size) as a JPEG, with an
@@ -57,11 +53,12 @@ export function thumbnailHandler(deps: { config: Config; store: ProjectStore }) 
       args.push("-ss", media.toFixed(3), "-i", file);
       videoInputs.push({ source: { ...source, offsetMs: offset }, input: inputs.length - 1 });
     }
-    if (videoInputs.length === 0) throw new Error("no picture source at that moment");
+    const cards = cardsOf(project).filter((card) => scene.sources.includes(card.id)).map((card) => ({ id: card.id, name: card.name }));
+    if (videoInputs.length === 0 && cards.length === 0) throw new Error("no picture source at that moment");
     const aspectScene = { s: 0, e: frame, layout: scene.layout, sources: scene.sources, ...(scene.fit ? { fit: scene.fit } : {}) };
     const saved = await readScenes(dir);
     const background = saved.rev === 0 && kind === "short" ? ({ kind: "blur", sigma: 40 } as const) : saved.background;
-    const video = layoutVideoGraph({ inputs: videoInputs, canvas, fps: FPS, scenes: [aspectScene], kept: [{ s: rel, e: rel + frame }], totalMs: rel + 2000, background });
+    const video = layoutVideoGraph({ inputs: videoInputs, cards, canvas, fps: FPS, scenes: [aspectScene], kept: [{ s: rel, e: rel + frame }], totalMs: rel + 2000, background });
     let graph = video.graph;
     let label = video.label;
     const cleanup: string[] = [];
