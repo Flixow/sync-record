@@ -145,6 +145,8 @@ export function layoutPanel(api: ProjectApi, stg: Stage, project: ProjectFile, f
     { "data-testid": "pj-lay-fallback", "aria-label": t("pj.lay.fallback"), onchange: () => state.setParams({ fallback: fallbackSelect.value === "wide" ? "wide" : "keep" }) },
     ...FALLBACKS.map((fallback) => option(fallback, t(`pj.lay.fallback.${fallback}`), false)),
   );
+  const screenOff = h("input", { type: "checkbox", "data-testid": "pj-lay-screen-off", onchange: () => state.setParams({ screen: screenOff.checked ? "off" : undefined }) });
+  const hasScreen = state.sources.some((source) => source.kind === "screen");
   const undoButton = h("button", { type: "button", class: "btn btn-small", "data-testid": "pj-lay-undo", onclick: () => state.undo() }, t("pj.lay.undo"));
   const redoButton = h("button", { type: "button", class: "btn btn-small", "data-testid": "pj-lay-redo", onclick: () => state.redo() }, t("pj.lay.redo"));
   const clearButton = h("button", { type: "button", class: "btn btn-small", "data-testid": "pj-lay-clear", onclick: () => state.clearOverrides() }, t("pj.lay.clear"));
@@ -244,6 +246,7 @@ export function layoutPanel(api: ProjectApi, stg: Stage, project: ProjectFile, f
     rhythmSelect.value = params.rhythm;
     if (document.activeElement !== dwellInput) dwellInput.value = String(params.minDwellMs / 1000);
     fallbackSelect.value = params.fallback;
+    screenOff.checked = params.screen === "off";
     undoButton.disabled = !state.canUndo;
     redoButton.disabled = !state.canRedo;
     clearButton.disabled = state.plan.overrides.length === 0;
@@ -341,6 +344,7 @@ export function layoutPanel(api: ProjectApi, stg: Stage, project: ProjectFile, f
       field(t("pj.lay.rhythm"), rhythmSelect),
       field(t("pj.lay.dwell"), dwellInput),
       field(t("pj.lay.fallback"), fallbackSelect),
+      hasScreen ? h("label", { class: "check", "data-testid": "pj-lay-screen-off-row" }, screenOff, h("span", {}, t("pj.lay.screenOff"), h("span", { class: "hint ex-hint" }, t("pj.lay.screenOff.hint")))) : null,
     ),
     h("div", { class: "row editor-toolbar" }, undoButton, redoButton, clearButton, saveStatus),
     h("div", { class: "row", "data-testid": "pj-lay-suggest-row" }, sugButton, h("label", { class: "check" }, sugLlm, h("span", {}, t("pj.lay.sug.llm"), h("span", { class: "hint ex-hint" }, t(settings.llmRemote ? "pj.lay.sug.hint.remote" : "pj.lay.sug.hint"))))),

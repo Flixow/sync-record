@@ -57,6 +57,7 @@ export function parseScenes(body: Record<string, unknown>): { plan: ScenePlan; a
     layout: oneOf(params.layout ?? base.layout, LAYOUT_IDS, "layout"),
     fallback: oneOf(params.fallback ?? base.fallback, ["wide", "keep"] as const, "fallback"),
     ...(params.fit === undefined ? {} : { fit: oneOf(params.fit, FITS, "fit") }),
+    ...(params.screen === undefined ? {} : { screen: oneOf(params.screen, ["off"] as const, "screen") }),
   };
   const rawOverrides = plan.overrides ?? [];
   if (!Array.isArray(rawOverrides) || rawOverrides.length > MAX_OVERRIDES) throw bad("overrides");

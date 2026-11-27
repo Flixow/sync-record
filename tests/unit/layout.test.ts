@@ -318,6 +318,12 @@ describe("layouts", () => {
     expect(stacked[0].w).toBe(stacked[1].w);
   });
 
+  it("screen-camera features the first screen of the scene: with several shares in the list the scene's own wins", () => {
+    // a scene of the second share lists its own screen first; the screen of another share is not drawn
+    const { tiles } = computeTiles({ layout: "screen-camera", canvas: wide, sources: [screen("share-2"), camera("cam"), screen("share-1")] });
+    expect(tiles.map((tile) => tile.sourceId).sort()).toEqual(["cam", "share-2"]);
+  });
+
   it("screen-camera without a screen shows the cameras, without a camera shows the screen", () => {
     expect(computeTiles({ layout: "screen-camera", canvas: wide, sources: [camera("a"), camera("b")] }).tiles.map((tile) => tile.sourceId)).toEqual(["a", "b"]);
     expect(computeTiles({ layout: "screen-camera", canvas: wide, sources: [camera("a"), camera("b"), camera("c")] }).tiles).toHaveLength(3);

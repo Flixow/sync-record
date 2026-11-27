@@ -17,6 +17,7 @@ import {
   sameScene,
   sceneAt,
   setParams,
+  shareIntervals,
   undoPlan,
   type ActivityTrack,
   type Rhythm,
@@ -277,6 +278,106 @@ describe("planScenes: active speaker", () => {
       { id: "b", levels: new Int8Array(duration / FRAME).fill(-30), speech: flags(10_000, 20_000) },
     ];
     expect(planScenes(tracks, duration, params()).map((scene) => scene.sources[0])).toEqual(["a", "b"]);
+  });
+});
+
+describe("planScenes: screen shares", () => {
+  const DURATION = 100_000;
+  const screen = (id: string, s: number, e: number): ActivityTrack => ({ id, kind: "screen", levels: new Int8Array(0), range: { s, e } });
+  const one = conversation([[0, 1000, 99_000]], DURATION, 1);
+  const two = conversation([[0, 1000, 20_000], [1, 22_000, 45_000], [0, 47_000, 70_000], [1, 72_000, 98_000]], DURATION);
+  const solo = (s: number, e: number): Scene => ({ s, e, layout: "solo", sources: ["cam0"] });
+  const shown = (s: number, e: number, id: string): Scene => ({ s, e, layout: "screen-camera", sources: [id, "cam0"] });
+
+  it("features each share's own screen during its stretch and the camera in the gaps", () => {
+    const scenes = planScenes([screen("scrA", 10_000, 30_000), screen("scrB", 50_000, 70_000), ...one], DURATION, params());
+    expect(scenes).toEqual([solo(0, 10_000), shown(10_000, 30_000, "scrA"), solo(30_000, 50_000), shown(50_000, 70_000, "scrB"), solo(70_000, DURATION)]);
+  });
+
+  it("lets the speakers lead in the gaps and beside the screen of every share", () => {
+    const scenes = planScenes([screen("scrA", 10_000, 30_000), screen("scrB", 50_000, 80_000), ...two], DURATION, params());
+    expectTiling(scenes, DURATION, "two shares");
+    for (const scene of scenes) {
+      const inA = scene.s >= 10_000 && scene.e <= 30_000;
+      const inB = scene.s >= 50_000 && scene.e <= 80_000;
+      if (inA || inB) {
+        expect(scene.layout).toBe("screen-camera");
+        expect(scene.sources[0]).toBe(inA ? "scrA" : "scrB");
+      } else {
+        expect(scene.layout).toBe("solo");
+        expect(scene.sources.some((id) => id.startsWith("scr"))).toBe(false);
+      }
+    }
+    expect(featuredAt(scenes, 5000)).toBe("cam0");
+    expect(sceneAt(scenes, 15_000)?.sources[1]).toBe("cam0");
+    expect(sceneAt(scenes, 25_000)?.sources[1]).toBe("cam1");
+    expect(sceneAt(scenes, 40_000)?.sources[0]).toBe("cam1");
+    expect(sceneAt(scenes, 60_000)?.sources[1]).toBe("cam0");
+  });
+
+  it("features the share that started last where two overlap, and holds it to the end of the later one", () => {
+    const scenes = planScenes([screen("scrA", 10_000, 50_000), screen("scrB", 30_000, 70_000), ...one], DURATION, params());
+    expect(scenes).toEqual([solo(0, 10_000), shown(10_000, 30_000, "scrA"), shown(30_000, 70_000, "scrB"), solo(70_000, DURATION)]);
+    // the order of the tracks does not matter
+    expect(planScenes([screen("scrB", 30_000, 70_000), ...one, screen("scrA", 10_000, 50_000)], DURATION, params())).toEqual(scenes);
+  });
+
+  it("returns to the first screen when a later share ends inside it", () => {
+    const scenes = planScenes([screen("scrA", 10_000, 80_000), screen("scrB", 30_000, 40_000), ...one], DURATION, params());
+    expect(scenes).toEqual([solo(0, 10_000), shown(10_000, 30_000, "scrA"), shown(30_000, 40_000, "scrB"), shown(40_000, 80_000, "scrA"), solo(80_000, DURATION)]);
+  });
+
+  it("bridges a gap of a second or less between shares, but not a longer one", () => {
+    const bridged = planScenes([screen("scrA", 10_000, 30_000), screen("scrB", 30_800, 50_000), ...one], DURATION, params());
+    expect(bridged).toEqual([solo(0, 10_000), shown(10_000, 30_800, "scrA"), shown(30_800, 50_000, "scrB"), solo(50_000, DURATION)]);
+    const apart = planScenes([screen("scrA", 10_000, 30_000), screen("scrB", 32_000, 50_000), ...one], DURATION, params());
+    expect(apart).toEqual([solo(0, 10_000), shown(10_000, 30_000, "scrA"), solo(30_000, 32_000), shown(32_000, 50_000, "scrB"), solo(50_000, DURATION)]);
+  });
+
+  it("treats a share that touches the edge of the recording as reaching it, whichever share it is", () => {
+    const scenes = planScenes([screen("scrA", 400, 30_000), screen("scrB", 60_000, DURATION - 300), ...one], DURATION, params());
+    expect(scenes).toEqual([shown(0, 30_000, "scrA"), solo(30_000, 60_000), shown(60_000, DURATION, "scrB")]);
+  });
+
+  it("ignores a share outside the recording and keeps a screen without a range for the whole recording", () => {
+    expect(planScenes([screen("late", DURATION + 5000, DURATION + 9000), ...one], DURATION, params())).toEqual([solo(0, DURATION)]);
+    const whole: ActivityTrack = { id: "scr", kind: "screen", levels: new Int8Array(0) };
+    expect(planScenes([whole, ...one], DURATION, params())).toEqual([shown(0, DURATION, "scr")]);
+  });
+
+  it('"off" drops every screen before the plan runs, as if none had been recorded', () => {
+    const whole: ActivityTrack = { id: "whole", kind: "screen", levels: new Int8Array(0) };
+    const shares = [screen("scrA", 10_000, 30_000), screen("scrB", 50_000, 70_000), whole];
+    for (const layout of ["solo", "speaker-thumbs", "grid"] as const) {
+      for (const cameras of [one, two]) {
+        const off = planScenes([...shares, ...cameras], DURATION, params({ layout, screen: "off" }));
+        expect(off, layout).toEqual(planScenes(cameras, DURATION, params({ layout })));
+        expect(off.some((scene) => scene.sources.some((id) => id.startsWith("scr") || id === "whole"))).toBe(false);
+      }
+    }
+    // without a camera there is nothing else to show, so the screen stays
+    expect(planScenes([whole], DURATION, params({ screen: "off" }))).toEqual([{ s: 0, e: DURATION, layout: "solo", sources: ["whole"] }]);
+  });
+
+  it('"off" is part of the plan: setting it changes the plan and undoing it brings the screen back', () => {
+    const plan = newPlan();
+    const off = setParams(plan, { screen: "off" });
+    expect(off).not.toBe(plan);
+    expect(setParams(off, { screen: "off" })).toBe(off);
+    expect(setParams(off, { screen: undefined }).params.screen).toBeUndefined();
+    const history = commitPlan(newPlanHistory(plan), off);
+    expect(undoPlan(history).present.params.screen).toBeUndefined();
+  });
+
+  it("shareIntervals sorts, clips and resolves the shares", () => {
+    const tracks = [screen("b", 60_000, 90_000), screen("a", 0, 50_000), screen("inside", 10_000, 20_000), screen("gone", 5000, 5000), screen("after", 120_000, 130_000)];
+    expect(shareIntervals(tracks, DURATION)).toEqual([
+      { id: "a", s: 0, e: 10_000 },
+      { id: "inside", s: 10_000, e: 20_000 },
+      { id: "a", s: 20_000, e: 50_000 },
+      { id: "b", s: 60_000, e: 90_000 },
+    ]);
+    expect(shareIntervals([], DURATION)).toEqual([]);
   });
 });
 

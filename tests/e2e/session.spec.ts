@@ -131,6 +131,23 @@ test("two participants record, one tab is killed and resumes, the collector outp
   await expect(host.getByTestId("track-audio")).toHaveAttribute("data-upload", /uploading|waiting/);
   await host.waitForTimeout(6000);
 
+  // ---- the guest stops sharing the screen and shares again: a second screen track, the take goes on ----
+  const sharesAtStart = process.env.E2E_SCREEN !== "0";
+  if (sharesAtStart) {
+    await expect(guest.getByTestId("stop-sharing")).toBeEnabled();
+    await expect(guest.getByTestId("share-screen")).toBeDisabled();
+    await guest.getByTestId("stop-sharing").click();
+    await expect(guest.getByTestId("share-screen")).toBeEnabled();
+    await expect(guest.getByTestId("stop-sharing")).toBeDisabled();
+    await expect(guest.getByTestId("rec-badge")).toBeVisible(); // stopping the screen does not end the take
+    await expect(guest.getByTestId("track-audio")).toHaveAttribute("data-upload", /uploading|waiting/);
+  }
+  await guest.getByTestId("share-screen").click();
+  await expect(guest.getByTestId("stop-sharing")).toBeEnabled();
+  await expect(guest.getByTestId("share-screen")).toBeDisabled();
+  await expect(guest.locator('[data-testid="track-screen"]')).toHaveCount(sharesAtStart ? 2 : 1);
+  await guest.locator("section.card", { has: guest.getByTestId("screen-share") }).screenshot({ path: test.info().outputPath("recording-share-screen.png") });
+
   // ---- the guest loses the network for a while: uploads retry, then resume where they stopped ----
   await guestContext.setOffline(true);
   await expect(guest.getByTestId("track-audio")).toHaveAttribute("data-upload", "retrying", { timeout: 30_000 });
@@ -200,7 +217,8 @@ test("two participants record, one tab is killed and resumes, the collector outp
       expect(track.file).toMatch(/^(audio|camera|screen)(-\d+)?\.webm$/);
       expect(track.bytesReceived).toBeGreaterThan(0);
       expect(track.clock.samples.length).toBeGreaterThan(0);
-      expect(track.markers.some((marker) => marker.kind === "start-beep")).toBe(true);
+      // the start beep is played once, when the take starts: a share started later never heard it
+      if (!(track.kind === "screen" && track.segment > 1)) expect(track.markers.some((marker) => marker.kind === "start-beep")).toBe(true);
       // Both browsers run on this machine as the collector does, so the handshake must find almost no offset.
       expect(Math.abs(track.clock.offsetMs)).toBeLessThan(1000);
       expect(track.clock.uncertaintyMs ?? Infinity).toBeLessThan(250);
@@ -215,8 +233,12 @@ test("two participants record, one tab is killed and resumes, the collector outp
       execFileSync("ffmpeg", ["-v", "error", "-ss", String(Math.max(0.5, probe.duration / 2)), "-i", file, "-t", "0.5", "-f", "null", "-"]);
     }
   }
-  // The guest also shared a (fake) screen: it is a third, separate track.
-  if (process.env.E2E_SCREEN !== "0") expect(guestEntry.tracks.map((track) => track.kind).sort()).toEqual(["audio", "camera", "screen"]);
+  // The guest also shared a (fake) screen, stopped and shared again: every share is a separate screen track.
+  const guestScreens = guestEntry.tracks.filter((track) => track.kind === "screen");
+  expect(guestEntry.tracks.map((track) => track.kind).sort()).toEqual(sharesAtStart ? ["audio", "camera", "screen", "screen"] : ["audio", "camera", "screen"]);
+  expect(guestScreens.map((track) => track.segment)).toEqual(sharesAtStart ? [1, 2] : [1]);
+  if (sharesAtStart) expect(guestScreens[0]?.endReason).toBe("stopped");
+  expect(guestScreens[guestScreens.length - 1]?.endReason).toBe("sessionEnded");
 
   // Both participants started within a plausible window of each other on the server clock.
   const starts = [hostAudio[0], guestEntry.tracks.find((track) => track.kind === "audio")].map((track) => track?.startServerMsEstimated ?? 0);

@@ -21,7 +21,8 @@ directory or any S3-compatible bucket you choose.
 ## Features
 
 - Chromium only (Chrome, Edge, Brave) on Mac and Windows, up to 4 participants per session.
-- Separate tracks per participant and kind: microphone audio, camera video, optional screen share. Recorded with
+- Separate tracks per participant and kind: microphone audio, camera video, optional screen share (started with the take or
+  with "Share screen" at any moment of it, and stopped and started again as often as needed). Recorded with
   `MediaRecorder` in 1 s slices as WebM (VP9 video, Opus audio), each kind in its own recorder so one failure never
   takes down the others.
 - Chunks are written to the browser's private storage (OPFS) first and uploaded in the background with resume.
@@ -225,7 +226,8 @@ On the project page the **Layout** section drives a live preview above the playe
 geometry (the same percentages the render derives its crops from) with the 480p proxies and keeps every picture in step
 with the audio, frame exact while paused. Buttons pick the layout and the shape; how pictures fill their tile (automatic,
 fill or whole picture), the background (a colour, or a blurred copy of the featured picture with a strength slider), the
-rhythm, the shortest scene and what to show while nobody speaks are saved like the cuts. The scene list shows each scene
+rhythm, the shortest scene, what to show while nobody speaks and "Do not feature the screen" (cameras only, for projects with
+a screen track; it is saved in the plan and can be undone) are saved like the cuts. The scene list shows each scene
 with its layout and featured picture, marks the scenes changed by hand and resets them one at a time; the strip above the
 transcript marks the scene boundaries. The layout has its own undo and redo (`Ctrl/Cmd+Z` while the focus is inside the
 Layout section; elsewhere the same keys undo cuts). When the proxies have been removed the preview says so and the layout
@@ -404,7 +406,7 @@ It launches Chromium itself, so install one first (`npx playwright install chrom
 `E2E_BROWSER_CHANNEL=chrome`. To attach to a Chromium you started yourself, set `E2E_CDP_URL`; for `session.spec.ts` it
 must have been started with the flags in `FAKE_MEDIA_ARGS` (see `tests/e2e/session.spec.ts`). The test runs with one
 worker because both participants share the machine. The guest also shares a screen (the browser must auto-select a
-capture source, which `FAKE_MEDIA_ARGS` does); set `E2E_SCREEN=0` to leave the screen track out.
+capture source, which `FAKE_MEDIA_ARGS` does) and, during the take, stops that share and shares again (a second screen track); set `E2E_SCREEN=0` to leave the first screen track out.
 
 ## Limits and honest notes
 
@@ -428,9 +430,15 @@ capture source, which `FAKE_MEDIA_ARGS` does); set `E2E_SCREEN=0` to leave the s
 - Captions are placed for the whole canvas, not per scene: in the 16:9 screen layout the lower caption line can run under
   the small camera picture in the corner. Where two people speak at once the transcript interleaves their words by time, so
   a caption line can mix both voices; check the captions of such stretches before burning them in.
-- A screen share is picked up for the stretch in which it was recorded; the layout there is the screen with the speaker's
-  camera in the corner, and the cameras follow the speaker before and after. Transitions are hard cuts, and the vertical
-  shape is a centre crop of the featured picture (no face tracking).
+- Every screen share is its own screen track (`screen.webm`, `screen-2.webm`, ...) and is featured for the stretch in
+  which it was recorded: the layout there is the screen with the speaker's camera in the corner (on 16:9) and the cameras
+  follow the speaker between shares. Where shares overlap, the one that started last is shown; a gap of a second or less
+  between two shares is held by the earlier one. The share bar's "share this tab instead" switch is turned off in the
+  picker, so a change of window is "Stop sharing" and "Share screen" again (a new, visible segment); a window switch
+  inside one share cannot be told apart from the rest of that share. A screen recorded for the whole take (for example a
+  video call window kept open from the start) is shown for the whole take: tick **Do not feature the screen** in the
+  Layout section to show the cameras instead. Only the microphones decide who speaks, never what is on a screen. Transitions
+  are hard cuts, and the vertical shape is a centre crop of the featured picture (no face tracking).
 - Local copies live in the browser's origin storage. Clearing site data deletes them, so keep them until the collector
   shows each track as ready.
 - The S3-compatible driver stores every uploaded part as its own object and streams the remuxed files with multipart

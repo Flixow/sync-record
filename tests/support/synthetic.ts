@@ -22,6 +22,8 @@ export interface SyntheticParticipant {
   audioFile?: string;
   /** Share of camera frames dropped to make the frame rate variable, 0..1. */
   droppedFrames?: number;
+  /** Screen shares during the take, in order: each one is its own screen track (screen.webm, screen-2.webm, ...) starting this long after the participant's tracks. */
+  screens?: { startMs: number; durationSec: number }[];
 }
 
 export interface SyntheticOptions {
@@ -155,6 +157,26 @@ export async function makeSyntheticSession(options: SyntheticOptions): Promise<S
         ]);
       }
       tracks.push({ ...common, trackId: `${pid}-camera-0001`, kind: "camera", file: "camera.webm", mime: "video/webm;codecs=vp9", durationSec: mediaSec });
+    }
+    for (const [n, share] of (spec.screens ?? []).entries()) {
+      const file = n === 0 ? "screen.webm" : `screen-${n + 1}.webm`;
+      await ffmpeg([
+        "-f", "lavfi", "-i", `testsrc2=s=${options.cameraSize ?? "320x180"}:r=10:d=${share.durationSec.toFixed(4)}`,
+        "-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8", "-b:v", "150k", "-pix_fmt", "yuv420p", "-f", "webm", path.join(dir, file),
+      ]);
+      tracks.push({
+        ...common,
+        trackId: `${pid}-screen-${String(n + 1).padStart(4, "0")}`,
+        kind: "screen",
+        segment: n + 1,
+        file,
+        mime: "video/webm;codecs=vp9",
+        durationSec: share.durationSec,
+        startCallClientMs: clientStart + share.startMs - 5,
+        startClientMs: clientStart + share.startMs,
+        startServerMsEstimated: trueStartServer + share.startMs + startError,
+        endClientMs: clientStart + share.startMs + share.durationSec * 1000,
+      });
     }
     participants.push({
       participantId: pid,

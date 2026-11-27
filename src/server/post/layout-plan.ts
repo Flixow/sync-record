@@ -11,10 +11,35 @@ export function layoutSources(project: ProjectFile): LayoutSource[] {
     .map((source) => ({ id: source.id, kind: source.kind === "screen" ? "screen" : "camera", width: source.width as number, height: source.height as number }));
 }
 
-/** The microphone track of a participant: the audio-only source, or any source that carries audio. */
-function microphoneOf(project: ProjectFile, participantId: string): ProjectSource | null {
-  const own = project.sources.filter((source) => source.participantId === participantId && source.audio !== null);
-  return own.find((source) => source.kind === "audio") ?? own[0] ?? null;
+/** Milliseconds two sources are both recording on the project timeline. */
+const overlapMs = (a: ProjectSource, b: ProjectSource): number => Math.max(0, Math.min(a.offsetMs + a.timelineDurationMs, b.offsetMs + b.timelineDurationMs) - Math.max(a.offsetMs, b.offsetMs));
+
+/**
+ * The microphone that belongs to a picture source. A participant who records several takes or segments has one microphone
+ * per segment, and the camera of segment 2 is spoken over by the microphone of segment 2, not segment 1. Of the owner's
+ * audio tracks: one recording at the same time as the picture beats one that does not, then the audio-only track, then
+ * the longest time together, then the same segment number.
+ */
+export function microphoneOf(project: ProjectFile, picture: ProjectSource): ProjectSource | null {
+  const rank = (source: ProjectSource): number[] => {
+    const together = overlapMs(source, picture);
+    return [together > 0 ? 1 : 0, source.kind === "audio" ? 1 : 0, together, source.segment === picture.segment ? 1 : 0];
+  };
+  const later = (a: number[], b: number[]): boolean => {
+    for (let index = 0; index < a.length; index++) if (a[index] !== b[index]) return (a[index] as number) > (b[index] as number);
+    return false;
+  };
+  let best: ProjectSource | null = null;
+  let bestRank: number[] = [];
+  for (const source of project.sources) {
+    if (source.participantId !== picture.participantId || source.audio === null) continue;
+    const next = rank(source);
+    if (best === null || later(next, bestRank)) {
+      best = source;
+      bestRank = next;
+    }
+  }
+  return best;
 }
 
 /** Activity of every picture source: a camera is "active" while its owner's microphone has speech. */
@@ -26,7 +51,7 @@ export async function activityTracks(project: ProjectFile, dir: string): Promise
       out.push({ id: source.id, levels: new Int8Array(0), kind: "screen", range: { s: owner.offsetMs, e: owner.offsetMs + owner.timelineDurationMs } });
       continue;
     }
-    const mic = microphoneOf(project, owner.participantId);
+    const mic = microphoneOf(project, owner);
     if (!mic?.audio) continue;
     const buffer = await readFile(path.join(dir, mic.audio.levels));
     out.push({ id: source.id, levels: new Int8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength), kind: "camera" });

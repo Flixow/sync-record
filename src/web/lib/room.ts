@@ -7,6 +7,7 @@ import {
   type RosterEntry,
   type ServerEvent,
   type TrackKind,
+  type ClockSample,
 } from "../../shared/protocol.js";
 import { ApiError, SessionApi, saveCredentials, type StoredCredentials } from "./api.js";
 import { playBeep, unlockAudio } from "./audio.js";
@@ -25,6 +26,7 @@ import {
 import { guessHeadphones, type BleedVerdict, type HeadphoneGuess } from "./headphones.js";
 import { LocalRecording } from "./opfs.js";
 import { TrackRecorder, pickMime } from "./recorder.js";
+import { screenControls, takeContinues, type ScreenControls } from "./screen-share.js";
 import { minutesLeft, storageLevel, type StorageLevel } from "./storage-math.js";
 import { Uploader } from "./uploader.js";
 import { t } from "../i18n/index.js";
@@ -548,19 +550,7 @@ export class Room {
         this.notice("warn", t("err.clockUnavailable"));
       }
       const samples = this.clock.samples.slice(-5);
-      const make = (kind: TrackKind, stream: MediaStream): Promise<TrackRecorder> =>
-        TrackRecorder.start({
-          kind,
-          stream,
-          sessionId: this.sid,
-          participantId: this.creds.participantId,
-          clock: { offsetMs: best.offsetMs, rttMs: best.rttMs },
-          clockSamples: samples,
-          settings: streamSettings(stream),
-          onEnded: (recorder, reason) => this.onRecorderEnded(recorder, reason),
-          onError: (_recorder, error, cause) =>
-            this.notice("error", t(cause === "storage" ? "err.disk" : "err.recorder", { message: error instanceof Error ? error.message : String(error) })),
-        });
+      const make = (kind: TrackKind, stream: MediaStream): Promise<TrackRecorder> => this.startRecorder(kind, stream, best, samples);
 
       const wanted: [TrackKind, MediaStream][] = [["audio", mic]];
       if (camera) wanted.push(["camera", camera]);
@@ -582,9 +572,7 @@ export class Room {
 
       this.recorders = [...this.recorders, ...started];
       for (const recorder of started) {
-        this.recordings = [...this.recordings, recorder.recording];
-        recorder.recording.onChange(() => this.notify());
-        this.uploader.add(recorder.recording);
+        this.adopt(recorder);
         const stream = wanted.find(([kind]) => kind === recorder.kind)?.[1];
         // The mic and camera previews were handed to the recorders: reopen them on the next setup.
         if (stream === this.micStream) this.micStream = null;
@@ -621,11 +609,92 @@ export class Room {
     return stream;
   }
 
+  private startRecorder(kind: TrackKind, stream: MediaStream, clock: { offsetMs: number; rttMs: number }, clockSamples: ClockSample[]): Promise<TrackRecorder> {
+    return TrackRecorder.start({
+      kind,
+      stream,
+      sessionId: this.sid,
+      participantId: this.creds.participantId,
+      clock: { offsetMs: clock.offsetMs, rttMs: clock.rttMs },
+      clockSamples,
+      settings: streamSettings(stream),
+      onEnded: (recorder, reason) => this.onRecorderEnded(recorder, reason),
+      onError: (_recorder, error, cause) =>
+        this.notice("error", t(cause === "storage" ? "err.disk" : "err.recorder", { message: error instanceof Error ? error.message : String(error) })),
+    });
+  }
+
+  /** A started recorder joins the take: it is listed, saved and uploaded like the others. */
+  private adopt(recorder: TrackRecorder): void {
+    this.recordings = [...this.recordings, recorder.recording];
+    recorder.recording.onChange(() => this.notify());
+    this.uploader.add(recorder.recording);
+  }
+
+  // ---- screen sharing during the take -------------------------------------
+
+  private sharePending = false;
+
+  /** What the Share screen and Stop sharing buttons may do now. */
+  get screenControls(): ScreenControls {
+    return screenControls(this.phase === "recording", this.recorders, this.sharePending);
+  }
+
+  /**
+   * Starts a screen recorder of its own (a new segment on the server) while the take runs. Needs the click that calls it:
+   * the picker only opens on a user gesture. The microphone and camera are not touched.
+   */
+  async shareScreen(): Promise<void> {
+    if (!this.screenControls.share) return;
+    this.sharePending = true;
+    this.notify();
+    let stream: MediaStream | null = null;
+    try {
+      try {
+        stream = await openScreen();
+      } catch {
+        this.notice("warn", t("err.screenDenied"));
+        return;
+      }
+      // the take may have been stopped while the picker was open
+      if (this.phase !== "recording") {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      if (!pickMime("screen")) {
+        stream.getTracks().forEach((track) => track.stop());
+        this.notice("error", t("err.codec", { kind: t("rec.track.screen") }));
+        return;
+      }
+      const best = this.clock.hasSamples() ? this.clock.best() : { offsetMs: 0, rttMs: UNKNOWN_RTT_MS };
+      const recorder = await this.startRecorder("screen", stream, best, this.clock.samples.slice(-5));
+      stream = null;
+      this.recorders = [...this.recorders, recorder];
+      this.adopt(recorder);
+      this.notices = this.notices.filter((item) => item.text !== t("rec.screenEnded"));
+      // the take was stopped while the recorder started: keep what it has and close it with the rest
+      if (this.phase !== "recording") await recorder.stop("stopped");
+      else void this.checkStorageWhileRecording();
+    } catch (error) {
+      stream?.getTracks().forEach((track) => track.stop());
+      this.notice("error", t("err.start", { message: `${t("rec.track.screen")}: ${error instanceof Error ? error.message : String(error)}` }));
+    } finally {
+      this.sharePending = false;
+      this.notify();
+    }
+  }
+
+  /** Stops the screen recorder only; the take goes on with the other tracks. */
+  async stopSharing(): Promise<void> {
+    await Promise.all(this.recorders.filter((recorder) => recorder.kind === "screen" && recorder.active).map((recorder) => recorder.stop("stopped")));
+    this.notify();
+  }
+
   private onRecorderEnded(recorder: TrackRecorder, reason: EndReason): void {
     if (reason === "trackEnded") {
       this.notice("warn", recorder.kind === "screen" ? t("rec.screenEnded") : t("rec.trackEnded", { kind: t(`rec.track.${recorder.kind}`) }));
     }
-    if (this.recordingKinds.length === 0 && this.phase === "recording") this.finishRecording();
+    if (!takeContinues(this.recorders) && this.phase === "recording") this.finishRecording();
     this.notify();
   }
 

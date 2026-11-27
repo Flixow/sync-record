@@ -1,5 +1,6 @@
 import { analyseBleed, type BleedVerdict } from "./headphones.js";
 import { playTestTone, TEST_TONE_HZ } from "./audio.js";
+import { displayCaptureOptions } from "./screen-share.js";
 
 export interface DeviceLists {
   mics: MediaDeviceInfo[];
@@ -32,9 +33,9 @@ export function openCamera(deviceId?: string): Promise<MediaStream> {
   });
 }
 
-/** Needs a user gesture: call it first inside the click handler that starts recording. */
+/** Needs a user gesture: call it first inside the click handler that starts recording or shares the screen. */
 export function openScreen(): Promise<MediaStream> {
-  return navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30 } }, audio: false });
+  return navigator.mediaDevices.getDisplayMedia(displayCaptureOptions());
 }
 
 export function onDeviceChange(listener: () => void): () => void {
