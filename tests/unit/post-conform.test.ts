@@ -48,7 +48,7 @@ describe("conform filters", () => {
     const filter = audioConformFilter({ rate: 1.00005, driftApplied: true, offsetMs: 1500 }, 60);
     expect(filter).toContain("asetrate=384019");
     expect(filter).toContain("adelay=1500.000ms:all=1");
-    expect(filter).toContain("apad=whole_dur=60.000000");
+    expect(filter).toContain("apad=whole_len=2880000");
     expect(audioConformFilter({ rate: 1, driftApplied: false, offsetMs: 0 }, 60)).not.toContain("asetrate");
   });
 
