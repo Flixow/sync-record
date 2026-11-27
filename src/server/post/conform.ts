@@ -48,20 +48,25 @@ export function audioConformFilter(source: Pick<ProjectSource, "rate" | "driftAp
  * The video filter chain that puts a source on the project timeline at a constant frame rate: the start offset and
  * the drift correction, then `finish` (the scaling for the proxy or for an export).
  */
-export function videoTimelineFilter(source: Pick<ProjectSource, "rate" | "offsetMs">, fps: number, finish: string[]): string {
+export function videoTimelineFilter(source: Pick<ProjectSource, "rate" | "offsetMs">, fps: number, finish: string[], finishBeforeFps = false): string {
   // The start offset is split: whole frames become black frames in front, the remainder shifts the timestamps before
   // the frame rate conversion, which then rounds to the nearest frame. The start is therefore off by at most half a frame.
   const padFrames = Math.floor(source.offsetMs / frameMs(fps) + 1e-6);
   const remainderSec = Math.max(0, source.offsetMs - padFrames * frameMs(fps)) / 1000;
-  const chain = [`setpts=(PTS-STARTPTS)/${source.rate.toFixed(9)}+${remainderSec.toFixed(6)}/TB`, `fps=${fps}`, ...finish];
+  const retime = `setpts=(PTS-STARTPTS)/${source.rate.toFixed(9)}+${remainderSec.toFixed(6)}/TB`;
+  const chain = finishBeforeFps ? [retime, ...finish, `fps=${fps}`] : [retime, `fps=${fps}`, ...finish];
   if (padFrames > 0) chain.push(`tpad=start_duration=${(padFrames / fps).toFixed(6)}:color=black`);
   chain.push("setsar=1", "format=yuv420p");
   return chain.join(",");
 }
 
-/** The video filter that makes a constant-frame-rate proxy on the project timeline. */
+/**
+ * The video filter that makes a constant-frame-rate proxy on the project timeline. The scaling runs before the frame
+ * rate conversion: a screen recording is variable frame rate, and the conversion repeats frames, so scaling first
+ * scales each source frame once instead of once per repeat.
+ */
 export function videoProxyFilter(source: Pick<ProjectSource, "rate" | "offsetMs">, fps: number): string {
-  return videoTimelineFilter(source, fps, [`scale=-2:${PROXY_HEIGHT}:flags=bilinear`]);
+  return videoTimelineFilter(source, fps, [`scale=-2:${PROXY_HEIGHT}:flags=bilinear`], true);
 }
 
 /**
