@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import type { Storage } from "./storage/index.js";
 
 const run = promisify(execFile);
+const REMUX_TIMEOUT_MS = 30 * 60_000;
 
 export interface RemuxResult {
   bytes: number;
@@ -47,7 +48,9 @@ export async function remuxTrack(
 
     // Chunked MediaRecorder output has no Duration and no Cues; rewriting the
     // container fixes both without touching the encoded frames.
-    await run(options.ffmpegPath, ["-y", "-v", "error", "-i", joined, "-c", "copy", "-cues_to_front", "1", output]);
+    await run(options.ffmpegPath, ["-y", "-v", "error", "-protocol_whitelist", "file", "-f", "matroska", "-i", joined, "-c", "copy", "-cues_to_front", "1", output], {
+      timeout: REMUX_TIMEOUT_MS,
+    });
 
     const info = await stat(output);
     if (info.size === 0) throw new Error("ffmpeg produced an empty file");

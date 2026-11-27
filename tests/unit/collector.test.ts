@@ -4,25 +4,27 @@ import { api, hasFfmpeg, makeWebm, startServer, type TestServer } from "./helper
 
 const sha = (data: Buffer): string => createHash("sha256").update(data).digest("hex");
 
+const START_MS = Date.now();
+
 const declare = (trackId: string, kind = "audio") => ({
   trackId,
   kind,
   mime: "audio/webm;codecs=opus",
   settings: { sampleRate: 48000 },
-  startClientMs: 1_000_000,
-  startCallClientMs: 999_990,
+  startClientMs: START_MS,
+  startCallClientMs: START_MS - 10,
   offsetMs: 25,
   rttMs: 8,
-  clockSamples: [{ atClientMs: 999_000, offsetMs: 24, rttMs: 10 }],
+  clockSamples: [{ atClientMs: START_MS - 1000, offsetMs: 24, rttMs: 10 }],
 });
 
 const finalizeBody = (totalBytes: number) => ({
   totalBytes,
   chunkCount: 3,
-  endClientMs: 1_005_000,
+  endClientMs: START_MS + 5000,
   endReason: "stopped",
   clockSamples: [],
-  markers: [{ id: "start-beep-1", kind: "start-beep", atClientMs: 1_000_100, outputLatencyMs: 12 }],
+  markers: [{ id: "start-beep-1", kind: "start-beep", atClientMs: START_MS + 100, outputLatencyMs: 12 }],
 });
 
 let server: TestServer;
@@ -45,6 +47,23 @@ describe("sessions and access", () => {
     expect(host.participantId).toBe("p1-alex-zolc");
     const view = await api(server, "GET", `/api/sessions/${host.sessionId}`, { token: host.participantToken });
     expect(view.body).toMatchObject({ ended: false, maxParticipants: 4 });
+  });
+
+  it("replaces control and line-separator characters in names so they cannot break subtitle files", async () => {
+    const created = await api(server, "POST", "/api/sessions", { json: { name: "Bob\n\n1\n00:00:00,000 --> 00:00:01,000\u202e" } });
+    expect(created.status).toBe(201);
+    const view = await api(server, "GET", `/api/sessions/${created.body.sessionId}`, { token: created.body.participantToken as string });
+    expect((view.body.roster as { name: string }[])[0]?.name).toBe("Bob 1 00:00:00,000 --> 00:00:01,000");
+    expect((await api(server, "POST", "/api/sessions", { json: { name: "\n\u200b " } })).status).toBe(400);
+  });
+
+  it("refuses a track whose start lies far outside the session, which would stretch the whole timeline", async () => {
+    const host = await session();
+    const declareAt = (startClientMs: number, trackId: string) =>
+      api(server, "POST", `/api/sessions/${host.sessionId}/tracks`, { token: host.participantToken, json: { ...declare(trackId), startClientMs } });
+    expect((await declareAt(1e12 * 30, "11111111-2222-3333-4444-555555555551")).status).toBe(400);
+    expect((await declareAt(START_MS - 3 * 24 * 3_600_000, "11111111-2222-3333-4444-555555555552")).status).toBe(400);
+    expect((await declareAt(START_MS - 3_600_000, "11111111-2222-3333-4444-555555555553")).status).toBe(200);
   });
 
   it("renews the caller's token on every visit and keeps the host role", async () => {

@@ -91,7 +91,7 @@ export function llmTransport(url: string): LlmTransport | null {
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
   const host = parsed.hostname.toLowerCase();
-  const local = host === "localhost" || host === "host.docker.internal" || host === "[::1]" || /^127\./u.test(host);
+  const local = host === "localhost" || host === "host.docker.internal" || host === "[::1]" || /^127(?:\.\d{1,3}){3}$/u.test(host);
   // 100.64.0.0/10 is the carrier-grade NAT range Tailscale hands out; traffic between its nodes is WireGuard-encrypted
   const octets = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/u.exec(host);
   const tailscale = (octets !== null && Number(octets[1]) === 100 && Number(octets[2]) >= 64 && Number(octets[2]) <= 127) || host.endsWith(".ts.net");

@@ -20,7 +20,7 @@ export function hasFfmpeg(): boolean {
 }
 
 export function testConfig(dir: string, extra: Record<string, string> = {}): Config {
-  return loadConfig({ TOKEN_SIGNING_SECRET: SECRET, STORAGE_LOCAL_DIR: dir, PORT: "0", WEB_DIR: path.join(dir, "web"), ...extra });
+  return loadConfig({ TOKEN_SIGNING_SECRET: SECRET, STORAGE_LOCAL_DIR: dir, PORT: "0", WEB_DIR: path.join(dir, "web"), POST_MIN_FREE_GB: "0", ...extra });
 }
 
 export interface TestServer {
