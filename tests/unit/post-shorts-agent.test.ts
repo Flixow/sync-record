@@ -188,15 +188,20 @@ describe.runIf(hasFfmpeg())("Suggest clips with the shorts agent", () => {
     expect(mock.calls[1]?.body.system).toContain("up to 2 stretches");
   });
 
-  it("makes no request unless the request asks for the model, and then gives the rule-based list", async () => {
+  it("makes no request when the request opts out with llm: false, and gives the rule-based list", async () => {
     mock.calls.length = 0;
-    for (const json of [{ limit: 5 }, { limit: 5, llm: false }]) {
-      const body = await suggest(server, json);
-      expect(body).toMatchObject({ source: "rule", llmUsed: false, llmAvailable: true, llmFailure: null });
-      expect(body.suggestions.length).toBeGreaterThan(0);
-      for (const clip of body.suggestions) expect(clip.source).toBeUndefined();
-    }
+    const body = await suggest(server, { limit: 5, llm: false });
+    expect(body).toMatchObject({ source: "rule", llmUsed: false, llmAvailable: true, llmFailure: null });
+    expect(body.suggestions.length).toBeGreaterThan(0);
+    for (const clip of body.suggestions) expect(clip.source).toBeUndefined();
     expect(mock.calls).toHaveLength(0);
+  });
+
+  it("uses the model when the request does not mention it", async () => {
+    mock.calls.length = 0;
+    const body = await suggest(server, { limit: 5 });
+    expect(body).toMatchObject({ source: "agent", llmUsed: true });
+    expect(mock.calls).toHaveLength(1);
   });
 
   it("makes no request when no model or no key is configured, and says the model is not available", async () => {

@@ -288,6 +288,7 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
     const canPlay = next.project.mixProxy !== null;
     if (!initialised) {
       initialised = true;
+      llmToggle.checked = next.settings.llm;
       void hooks.run(async () => {
         saved = await api.clips();
         if (!disposed) renderSaved();

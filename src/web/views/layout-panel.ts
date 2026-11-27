@@ -288,6 +288,7 @@ export function layoutPanel(api: ProjectApi, stg: Stage, project: ProjectFile, f
   // ---- a suggested plan -------------------------------------------------------------------------------------------------
   let gone = false;
   const sugLlm = h("input", { type: "checkbox", "data-testid": "pj-lay-suggest-llm" });
+  sugLlm.checked = settings.llm;
   const sugButton = h("button", { type: "button", class: "btn btn-small", "data-testid": "pj-lay-suggest", onclick: () => void suggest() }, t("pj.lay.sug"));
   const sugHost = h("div", { class: "stack", "data-testid": "pj-lay-suggest-result" });
 
