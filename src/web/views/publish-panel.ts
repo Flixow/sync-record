@@ -335,6 +335,7 @@ export function publishPanel(api: ProjectApi, hooks: PublishPanelHooks): Publish
     noPicture.hidden = picture;
     thumbControls.hidden = !picture;
     if (!initialised) {
+      llmToggle.checked = next.settings.llm;
       llmHint.textContent = t(next.settings.llmRemote ? "pj.pub.llm.hint.remote" : "pj.pub.llm.hint");
       initialised = true;
       // the list is only needed for the picture of the latest thumbnail; a failed read leaves it empty

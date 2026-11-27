@@ -35,6 +35,11 @@ export const DEFAULT_ANTHROPIC_URL = "https://api.anthropic.com";
 export const DEFAULT_ANTHROPIC_MODEL = "claude-opus-5-5";
 /** Sent as `anthropic-version`. */
 const ANTHROPIC_VERSION = "2023-06-01";
+/**
+ * Opus 5.5 always thinks before it answers (it cannot be turned off) and the thinking counts toward `max_tokens`, so the
+ * answer limit of a prompt is raised by this much for provider "anthropic": a ceiling, billed only for what is used.
+ */
+const ANTHROPIC_THINKING_HEADROOM_TOKENS = 4096;
 
 export interface LlmSettings {
   /** Base URL of the server, for example http://127.0.0.1:8080; null turns the model off (provider "anthropic": null means the Anthropic API). */
@@ -56,6 +61,8 @@ export interface LlmPrompt {
   maxTokens?: number;
   /** Replaces the client's timeout for this one call. */
   timeoutMs?: number;
+  /** How much the model may think before it answers (provider "anthropic": `output_config.effort`); omitted: the model's own default. Small structured jobs ask for "low". */
+  effort?: "low" | "medium";
 }
 
 export interface LlmClient {
@@ -157,7 +164,13 @@ export class HttpLlmClient implements LlmClient {
     if (provider === "omp-gateway") headers["x-omp-app"] = LLM_APP_NAME;
     const body =
       provider === "anthropic"
-        ? { model, max_tokens: prompt.maxTokens ?? 1024, system: prompt.system, messages: [{ role: "user", content: prompt.user }] }
+        ? {
+            model,
+            max_tokens: (prompt.maxTokens ?? 1024) + ANTHROPIC_THINKING_HEADROOM_TOKENS,
+            system: prompt.system,
+            messages: [{ role: "user", content: prompt.user }],
+            ...(prompt.effort === undefined ? {} : { output_config: { effort: prompt.effort } }),
+          }
         : {
             model,
             messages: [
@@ -256,7 +269,7 @@ export async function llmDraft(llm: LlmClient, input: DraftInput): Promise<Publi
   if (input.name) lines.push(`Name: ${input.name}`);
   if (input.chapters.length > 0) lines.push(`Chapters:\n${formatChapters(input.chapters)}`);
   lines.push(`Transcript excerpt:\n${excerptOf(input.words)}`);
-  const answer = await llm.rank({ system, user: lines.join("\n\n"), maxTokens: 700 }).catch(() => null);
+  const answer = await llm.rank({ system, user: lines.join("\n\n"), maxTokens: 700, effort: "low" }).catch(() => null);
   const rawTitles = fieldOf(answer, "titles");
   const rawSummary = fieldOf(answer, "summary");
   const rawTags = fieldOf(answer, "tags");
@@ -305,7 +318,7 @@ export async function llmChapterTitles(llm: LlmClient, chapters: Chapter[], word
       return `### Chapter ${index + 1}\n${trimTo(text, CHAPTER_EXCERPT_CHARS)}`;
     })
     .join("\n\n");
-  const answer = await llm.rank({ system, user, maxTokens: 120 + chapters.length * 40 }).catch(() => null);
+  const answer = await llm.rank({ system, user, maxTokens: 120 + chapters.length * 40, effort: "low" }).catch(() => null);
   const titles = fieldOf(answer, "titles");
   if (!Array.isArray(titles) || titles.length !== chapters.length || !(titles as unknown[]).every((title) => typeof title === "string")) return null;
   const next = chapters.map((chapter, index) => {
@@ -326,6 +339,6 @@ const SCENE_PLAN_SYSTEM =
 /** Asks the model for a layout per segment (plus highlights and cuts). Null when the model is off or its answer is not usable. */
 export async function llmScenePlan(llm: LlmClient, segments: PlanSegment[]): Promise<SegmentChoice[] | null> {
   if (!llm.enabled || segments.length === 0) return null;
-  const answer = await llm.rank({ system: SCENE_PLAN_SYSTEM, user: describeSegments(segments), maxTokens: 200 + segments.length * 60 }).catch(() => null);
+  const answer = await llm.rank({ system: SCENE_PLAN_SYSTEM, user: describeSegments(segments), maxTokens: 200 + segments.length * 60, effort: "low" }).catch(() => null);
   return parseSegmentChoices(answer, segments);
 }

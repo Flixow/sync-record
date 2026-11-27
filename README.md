@@ -38,7 +38,7 @@ directory or any S3-compatible bucket you choose.
   by transcript, silence removal, active-speaker and screen-share layouts (16:9, 9:16, 1:1), captions, loudness-normalised
   YouTube and audio exports, 20-90 s vertical clips and publish drafts (chapters, titles, thumbnails). Nothing is
   published anywhere by SyncRecord.
-- Optional extras, both **off by default**: a language-model provider (`LLM_URL`, or `LLM_PROVIDER=anthropic` with a key; the
+- Optional extras, both **off until configured**: a language-model provider (`LLM_URL`, or `LLM_PROVIDER=anthropic` with a key; the
   clips cut by the model, chapter titles, title drafts and a model-driven scene plan, see
   [Optional language model](#optional-language-model); the transcript text leaves the machine when it is on) and server-side
   telemetry to your own PostHog (`POSTHOG_KEY` and `POSTHOG_HOST`, see [Telemetry](#telemetry)).
@@ -274,12 +274,12 @@ find the file in the exports list. The **Export** panel gains burned-in captions
 background noise); every option is off by default, and the noise model is downloaded only when you ask for it. The
 **Publish** panel shows the chapters with YouTube's rules checked and a copy button, the title and description draft, and a
 thumbnail picker (moment, video or Short shape, optional text) that ends with a picture you can download. The "language model"
-boxes of Clips and Publish, and the scene-plan box of the layout editor, are off by default and only act when a model is configured (`LLM_URL`, or `LLM_PROVIDER=anthropic` with a key).
+boxes of Clips and Publish, and the scene-plan box of the layout editor, are ticked by default when a model is configured (`LLM_URL`, or `LLM_PROVIDER=anthropic` with a key) and do nothing without one; untick a box to use the built-in rules for that request.
 
 ### Optional language model
 
 Off unless a model is configured: `LLM_URL` is set, or `LLM_PROVIDER=anthropic` with a key. It is then used only for the
-request that ticks the box. Four things use it, each with a built-in fallback: **cutting the clips** (the shorts agent,
+request whose box is ticked (all boxes start ticked; an API request that omits `llm` uses the model too, `llm: false` opts out). Four things use it, each with a built-in fallback: **cutting the clips** (the shorts agent,
 below), retitling the chapters (start times and count never change), the title and description draft, and a
 **scene-plan suggestion** (layout per stretch of the recording). Any failure (refused, timeout, overload, an answer that
 does not validate) returns the built-in result and a short reason; nothing is retried.

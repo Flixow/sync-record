@@ -112,8 +112,8 @@ export async function handlePublishRoutes(post: PostProduction, sid: string, res
     const transcript = await transcriptOf(post, sid);
     const limit = body.limit === undefined ? DEFAULT_CLIP_LIMIT : Math.min(50, v.nonNegativeInt(body.limit, "limit"));
     const highlights = project.highlights.map((h) => ({ tMs: h.atMs }));
-    // the language model cuts the clips (one request, transcript text only): it is off unless the host configured one and the request asks for it
-    const llm = createLlmClient(body.llm === true ? post.config.post.llm : null);
+    // the language model cuts the clips (one request, transcript text only): it is used whenever the host configured one, unless the request says `llm: false`; the rules answer when it does not
+    const llm = createLlmClient(body.llm !== false ? post.config.post.llm : null);
     const agent = llm.enabled
       ? await agentClips(llm, { words: transcript.words, highlights, durationMs: project.durationMs, count: body.count === undefined ? SHORTS_DEFAULT_COUNT : v.nonNegativeInt(body.count, "count"), timeoutMs: post.config.post.llm?.shortsTimeoutMs ?? DEFAULT_SHORTS_TIMEOUT_MS })
       : null;
@@ -148,7 +148,7 @@ export async function handlePublishRoutes(post: PostProduction, sid: string, res
     const baseChapters = chaptersForYoutube(transcript.words, project.durationMs, edl);
     const language = body.language === "pl" || body.language === "en" ? body.language : languageOf(transcript);
     const names = new Map(project.participants.map((p) => [p.id, p.name]));
-    const llm = createLlmClient(body.llm === true ? post.config.post.llm : null);
+    const llm = createLlmClient(body.llm !== false ? post.config.post.llm : null);
     // the model only retitles the chapters (times and count stay), then writes the titles and summary around them
     const retitled = llm.enabled ? await llmChapterTitles(llm, baseChapters, wordsThroughEdl(transcript.words, edl), language) : null;
     const chapters = retitled ?? baseChapters;

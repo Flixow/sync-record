@@ -199,7 +199,7 @@ export async function postRoutes(post: PostProduction, http: Http, req: Incoming
   if (await handlePublishRoutes(post, sid, rest, method, req, res, http)) return true;
   if (rest[0] === "scenes" && rest[1] === "suggest" && rest.length === 2 && method === "POST") {
     const body = await http.readJson(req);
-    http.json(res, 200, await suggestScenePlan(post, sid, body.llm === true));
+    http.json(res, 200, await suggestScenePlan(post, sid, body.llm !== false));
     return true;
   }
   if (rest[0] === "scenes" && rest.length === 1) {
