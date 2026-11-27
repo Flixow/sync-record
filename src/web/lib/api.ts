@@ -15,6 +15,9 @@ import type {
   UploadResponse,
 } from "../../shared/protocol.js";
 
+const UPLOAD_BASE_TIMEOUT_MS = 30_000;
+const SLOWEST_UPLOAD_BYTES_PER_SECOND = 32 * 1024;
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -95,6 +98,7 @@ export class SessionApi {
       token: this.token,
       body,
       headers: { "x-sha256": sha256, "content-type": "application/octet-stream" },
+      timeoutMs: UPLOAD_BASE_TIMEOUT_MS + (body.byteLength / SLOWEST_UPLOAD_BYTES_PER_SECOND) * 1000,
     });
   finalize = (tid: string, request: FinalizeRequest) =>
     call<TrackStateResponse>("POST", this.path(`/tracks/${tid}/finalize`), { token: this.token, json: request });

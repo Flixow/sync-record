@@ -109,6 +109,10 @@ export class TrackRecorder {
     recorder.start(TIMESLICE_MS);
     await started;
     await this.recording.saveMeta();
+    recorder.onerror = (event) => {
+      this.init.onError(this, (event as ErrorEvent).error ?? new Error("recorder error"));
+      void this.stop("error");
+    };
   }
 
   get active(): boolean {
@@ -122,6 +126,7 @@ export class TrackRecorder {
   }
 
   private async finish(reason: EndReason): Promise<void> {
+    const stopRequestedMs = clientNowMs();
     const recorder = this.recorder;
     if (recorder && recorder.state !== "inactive") {
       await new Promise<void>((resolve) => {
@@ -133,7 +138,7 @@ export class TrackRecorder {
     await this.recording.flush().catch(() => undefined);
     const { meta } = this.recording;
     meta.state = "stopped";
-    meta.endClientMs = clientNowMs();
+    meta.endClientMs = stopRequestedMs;
     meta.endReason = reason;
     await this.recording.saveMeta();
     this.init.onEnded(this, reason);
