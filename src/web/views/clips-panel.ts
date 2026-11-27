@@ -10,6 +10,7 @@ import type { ClipsFile, ProjectApi, ProjectState } from "../lib/project-api.js"
 import { formatClock } from "../lib/time.js";
 import { getLang, t } from "../i18n/index.js";
 import { captionStyleSelect } from "./caption-style-select.js";
+import { failureBanner, progressBar, stageLabel } from "./job-status.js";
 import { banner } from "./layout.js";
 import { formatSelect } from "./preset-select.js";
 
@@ -108,8 +109,10 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
     const nameOf = (pid: string): string => names.get(pid) ?? pid;
     const isSaved = saved.clips.some((item) => item.id === clip.id);
     const excerpt = transcript ? clipText(transcript.words, clip, nameOf) : "";
-    const step = (testId: string, edge: "s" | "e", steps: number, label: string): HTMLButtonElement =>
-      h("button", { type: "button", class: "btn btn-small", "data-testid": testId, "aria-label": label, title: label, onclick: () => nudge(index, edge, steps, testId) }, steps < 0 ? t("pj.cl.wordEarlier") : t("pj.cl.wordLater"));
+    const step = (testId: string, edge: "s" | "e", steps: number, label: string): HTMLButtonElement => {
+      const visible = steps < 0 ? t("pj.cl.wordEarlier") : t("pj.cl.wordLater");
+      return h("button", { type: "button", class: "btn btn-small", "data-testid": testId, "aria-label": `${visible}: ${label}`, title: label, onclick: () => nudge(index, edge, steps, testId) }, visible);
+    };
     const el = h(
       "article",
       { class: "clip-card", "data-testid": "pj-cl-card", "data-id": clip.id, "data-start": String(clip.s), "data-end": String(clip.e) },
@@ -195,16 +198,16 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
     let status: Node | null = null;
     if (job && ACTIVE.has(job.status)) {
       const percent = Math.round(job.progress * 100);
-      const stage = job.stage === "loudness" || job.stage === "encode" ? t(`pj.ex.stage.${job.stage}`) : (job.stage ?? "");
+      const stage = stageLabel(job.stage);
       status = h(
         "div",
         { class: "stack" },
-        h("div", { class: "bar", role: "progressbar", "aria-valuenow": String(percent) }, h("div", { class: "bar-fill", style: `width:${percent}%` })),
+        progressBar(percent, t("pj.cl.render"), job.stage),
         h("p", { class: "hint", "data-testid": "pj-cl-progress", "data-status": job.status }, t("pj.cl.progress", { percent, stage })),
         h("button", { type: "button", class: "btn btn-small", "data-testid": "pj-cl-cancel", onclick: () => void hooks.run(() => api.cancelJob(job.id)) }, t("pj.cancel")),
       );
     } else if (job?.status === "done") status = h("p", { class: "hint", "data-testid": "pj-cl-done" }, t("pj.cl.done"));
-    else if (job?.status === "failed") status = banner("error", t("pj.cl.failed", { message: job.error ?? "?" }), "pj-cl-failed");
+    else if (job?.status === "failed") status = failureBanner("pj.cl.failed", job.error, "pj-cl-failed");
     else if (job?.status === "canceled") status = h("p", { class: "hint", "data-testid": "pj-cl-canceled" }, t("pj.cl.canceled"));
 
     return h(

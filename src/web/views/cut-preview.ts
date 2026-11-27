@@ -4,7 +4,7 @@ import type { EditState } from "../lib/edit-state.js";
 import type { ProjectApi } from "../lib/project-api.js";
 import { formatClock } from "../lib/time.js";
 import { t } from "../i18n/index.js";
-import { banner } from "./layout.js";
+import { failureBanner, progressBar, stageLabel } from "./job-status.js";
 
 /** The newest job of a kind, by creation time. */
 function latest(jobs: JobRecord[], kind: string, status?: JobRecord["status"]): JobRecord | undefined {
@@ -39,11 +39,11 @@ export function cutPreview(api: ProjectApi, edit: EditState, start: () => Promis
       const percent = Math.round(active.progress * 100);
       setChildren(
         progress,
-        h("div", { class: "bar", role: "progressbar", "aria-valuenow": String(percent) }, h("div", { class: "bar-fill", style: `width:${percent}%` })),
-        h("p", { class: "hint", "data-testid": "pj-ed-render-progress" }, `${percent}% ${active.stage ?? ""}`),
+        progressBar(percent, t("pj.ed.render.title"), active.stage),
+        h("p", { class: "hint", "data-testid": "pj-ed-render-progress" }, `${percent}% ${stageLabel(active.stage)}`.trim()),
       );
     } else if (newest?.status === "failed") {
-      setChildren(progress, banner("error", newest.error ?? "?", "pj-ed-render-error"));
+      setChildren(progress, failureBanner("pj.job.cutPreview", newest.error ?? "?", "pj-ed-render-error"));
     } else {
       setChildren(progress);
     }

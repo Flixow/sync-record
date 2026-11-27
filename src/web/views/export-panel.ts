@@ -4,9 +4,11 @@ import { ApiError } from "../lib/api.js";
 import { h, setChildren } from "../lib/dom.js";
 import type { ExportRecord, ProjectApi, ProjectState } from "../lib/project-api.js";
 import { formatBytes, formatDuration } from "../lib/storage-math.js";
+import { formatNumber } from "../lib/number.js";
 import { getLang, t } from "../i18n/index.js";
 import { captionStyleSelect } from "./caption-style-select.js";
-import { banner } from "./layout.js";
+import { failureBanner, progressBar, stageLabel } from "./job-status.js";
+import { banner, scrollable, srOnly } from "./layout.js";
 import { formatSelect } from "./preset-select.js";
 
 const ACTIVE = new Set(["queued", "running"]);
@@ -202,7 +204,7 @@ export function exportPanel(api: ProjectApi, hooks: ExportPanelHooks): ExportPan
         h("td", { class: "num" }, formatBytes(record.bytes)),
         h("td", { class: "num" }, record.durationMs > 0 ? formatDuration(record.durationMs / 1000) : "–"),
         h("td", {}, new Date(record.createdAtMs).toLocaleString(getLang())),
-        h("td", { class: "num" }, record.loudnessLufs === null ? "–" : t("pj.ex.loudness", { lufs: Number(record.loudnessLufs.toFixed(1)) })),
+        h("td", { class: "num" }, record.loudnessLufs === null ? "–" : t("pj.ex.loudness", { lufs: formatNumber(record.loudnessLufs, 1) })),
         h(
           "td",
           { class: "row" },
@@ -229,11 +231,13 @@ export function exportPanel(api: ProjectApi, hooks: ExportPanelHooks): ExportPan
     );
     setChildren(
       listHost,
-      h(
-        "table",
-        { class: "data-table" },
-        h("thead", {}, h("tr", {}, h("th", {}, t("pj.ex.col.format")), h("th", {}, t("pj.ex.col.size")), h("th", {}, t("pj.ex.col.length")), h("th", {}, t("pj.ex.col.created")), h("th", {}, t("pj.ex.col.loudness")), h("th", {}))),
-        h("tbody", {}, ...rows),
+      scrollable(
+        h(
+          "table",
+          { class: "data-table" },
+          h("thead", {}, h("tr", {}, h("th", {}, t("pj.ex.col.format")), h("th", {}, t("pj.ex.col.size")), h("th", {}, t("pj.ex.col.length")), h("th", {}, t("pj.ex.col.created")), h("th", {}, t("pj.ex.col.loudness")), h("th", {}, srOnly(t("common.actions"))))),
+          h("tbody", {}, ...rows),
+        ),
       ),
     );
   }
@@ -286,10 +290,10 @@ export function exportPanel(api: ProjectApi, hooks: ExportPanelHooks): ExportPan
 
     if (active) {
       const percent = Math.round(active.progress * 100);
-      const stage = active.stage === "loudness" || active.stage === "encode" ? t(`pj.ex.stage.${active.stage}`) : (active.stage ?? "");
+      const stage = stageLabel(active.stage);
       setChildren(
         progressHost,
-        h("div", { class: "bar", role: "progressbar", "aria-valuenow": String(percent) }, h("div", { class: "bar-fill", style: `width:${percent}%` })),
+        progressBar(percent, t("pj.ex.title"), active.stage),
         h("p", { class: "hint", "data-testid": "pj-ex-progress", "data-stage": active.stage ?? "", "data-status": active.status }, t("pj.ex.progress", { percent, stage })),
         h("button", { type: "button", class: "btn btn-small", "data-testid": "pj-ex-cancel", onclick: () => void hooks.run(() => api.cancelJob(active.id)) }, t("pj.cancel")),
       );
@@ -298,7 +302,7 @@ export function exportPanel(api: ProjectApi, hooks: ExportPanelHooks): ExportPan
     }
     setChildren(
       statusHost,
-      !active && last?.status === "failed" ? banner("error", last.error ?? "?", "pj-ex-error") : null,
+      !active && last?.status === "failed" ? failureBanner("pj.job.render", last.error ?? "?", "pj-ex-error") : null,
       !active && last?.status === "canceled" ? h("p", { class: "hint", "data-testid": "pj-ex-canceled" }, t("pj.ex.canceled")) : null,
     );
 

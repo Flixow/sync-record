@@ -7,7 +7,7 @@ import { card, page } from "./layout.js";
 /** Name form for someone who opened an invite link. The token comes from the URL fragment and is never sent as a path. */
 export function joinView(sid: string, inviteToken: string | null, navigate: (path: string) => void): HTMLElement {
   const error = h("div", { class: "form-error", role: "alert", "data-testid": "join-error" });
-  const name = h("input", { id: "join-name", type: "text", maxlength: "60", autocomplete: "name", "data-testid": "join-name" });
+  const name = h("input", { id: "join-name", type: "text", required: true, pattern: ".*\\S.*", maxlength: "60", autocomplete: "name", "data-testid": "join-name" });
   const submit = h("button", { type: "submit", class: "btn btn-primary", "data-testid": "join-submit" }, t("join.button"));
 
   if (!inviteToken) error.textContent = t("join.missing");
@@ -28,7 +28,7 @@ export function joinView(sid: string, inviteToken: string | null, navigate: (pat
       class: "stack",
       onsubmit: (event: Event) => {
         event.preventDefault();
-        if (!inviteToken || !name.value.trim()) return;
+        if (!inviteToken) return;
         submit.disabled = true;
         submit.textContent = t("join.joining");
         error.textContent = "";

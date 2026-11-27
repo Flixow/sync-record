@@ -6,7 +6,7 @@ import type { EditState } from "../lib/edit-state.js";
 import type { ProjectApi } from "../lib/project-api.js";
 import { formatClock, formatSeconds } from "../lib/time.js";
 import { t } from "../i18n/index.js";
-import { banner } from "./layout.js";
+import { banner, scrollable, srOnly } from "./layout.js";
 
 const DEFAULT_MIN_SILENCE_MS = 700;
 const DEFAULT_KEEP_MS = 300;
@@ -77,11 +77,13 @@ export function silencePanel(api: ProjectApi, edit: EditState, previewCut: (cut:
     });
     setChildren(
       list,
-      h(
-        "table",
-        { class: "data-table silences" },
-        h("thead", {}, h("tr", {}, h("th", {}, ""), h("th", {}, t("pj.ed.si.start")), h("th", {}, t("pj.ed.si.length")), h("th", {}, t("pj.ed.si.cut")), h("th", {}, ""))),
-        h("tbody", {}, ...rows),
+      scrollable(
+        h(
+          "table",
+          { class: "data-table silences" },
+          h("thead", {}, h("tr", {}, h("th", {}, srOnly(t("pj.ed.si.select"))), h("th", {}, t("pj.ed.si.start")), h("th", {}, t("pj.ed.si.length")), h("th", {}, t("pj.ed.si.cut")), h("th", {}, srOnly(t("common.actions"))))),
+          h("tbody", {}, ...rows),
+        ),
       ),
     );
     summarize();

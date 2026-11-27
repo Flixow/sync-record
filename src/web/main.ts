@@ -2,7 +2,7 @@ import "./styles.css";
 import { SessionApi, loadCredentials, saveCredentials } from "./lib/api.js";
 import { ProjectApi } from "./lib/project-api.js";
 import { Room } from "./lib/room.js";
-import { initLang, onLangChange } from "./i18n/index.js";
+import { initLang, onLangChange, t } from "./i18n/index.js";
 import { claimView, noAccessView } from "./views/access.js";
 import { homeView } from "./views/home.js";
 import { joinView } from "./views/join.js";
@@ -18,10 +18,23 @@ let room: Room | null = null;
 let roomUnsubscribe: (() => void) | null = null;
 let rendering = 0;
 let disposeProject: (() => void) | null = null;
+let focusHeading = false;
 
 function navigate(path: string): void {
   history.pushState(null, "", path);
+  focusHeading = true;
   void render();
+}
+
+function show(view: HTMLElement): void {
+  app?.replaceChildren(view);
+  const heading = view.querySelector("h1");
+  document.title = heading?.textContent ? `${heading.textContent} · ${t("brand.name")}` : t("brand.name");
+  if (focusHeading && heading) {
+    heading.tabIndex = -1;
+    heading.focus();
+  }
+  focusHeading = false;
 }
 
 function disposeRoom(): void {
@@ -35,7 +48,7 @@ async function renderProject(sid: string, ticket: number): Promise<void> {
   disposeRoom();
   const credentials = loadCredentials(sid);
   if (!credentials?.host) {
-    app?.replaceChildren(noAccessView());
+    show(noAccessView());
     return;
   }
   // Visiting the page renews the host token (sliding expiry), as the room page does.
@@ -49,7 +62,7 @@ async function renderProject(sid: string, ticket: number): Promise<void> {
   if (ticket !== rendering) return;
   const view = projectView(new ProjectApi(sid, token));
   disposeProject = view.dispose;
-  app?.replaceChildren(view.el);
+  show(view.el);
 }
 
 async function render(): Promise<void> {
@@ -65,14 +78,14 @@ async function render(): Promise<void> {
   if (claimMatch?.[1]) {
     disposeRoom();
     const fragment = location.hash.startsWith("#") ? location.hash.slice(1) : "";
-    app?.replaceChildren(claimView(claimMatch[1], fragment || null, navigate));
+    show(claimView(claimMatch[1], fragment || null, navigate));
     return;
   }
   const match = /^\/join\/([a-z0-9-]+)\/?$/.exec(location.pathname);
   if (!match || !match[1]) {
     disposeRoom();
     const view = await homeView(navigate);
-    if (ticket === rendering) app?.replaceChildren(view);
+    if (ticket === rendering) show(view);
     return;
   }
   const sid = match[1];
@@ -80,7 +93,7 @@ async function render(): Promise<void> {
   if (!credentials) {
     disposeRoom();
     const fragment = location.hash.startsWith("#") ? location.hash.slice(1) : "";
-    app?.replaceChildren(joinView(sid, fragment || null, navigate));
+    show(joinView(sid, fragment || null, navigate));
     return;
   }
   // The invite token only lives in the fragment until it is exchanged; remove it from the address bar.
@@ -102,9 +115,12 @@ async function render(): Promise<void> {
       view.update();
     });
   });
-  if (ticket === rendering) app?.replaceChildren(view.el);
+  if (ticket === rendering) show(view.el);
 }
 
 onLangChange(() => void render());
-window.addEventListener("popstate", () => void render());
+window.addEventListener("popstate", () => {
+  focusHeading = true;
+  void render();
+});
 void render();

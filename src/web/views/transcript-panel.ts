@@ -238,7 +238,7 @@ export function transcriptPanel(api: ProjectApi, stg: Stage, project: ProjectFil
     { class: "stack" },
     h("div", { class: "row editor-toolbar", role: "toolbar", "aria-label": t("pj.ed.title") }, deleteButton, keepButton, restoreButton, selInfo),
     h("p", { class: "hint" }, t("pj.ed.hint")),
-    h("div", { class: "row" }, input, h("button", { type: "button", class: "btn btn-small", onclick: () => gotoHit(-1) }, "↑"), h("button", { type: "button", class: "btn btn-small", onclick: () => gotoHit(1) }, "↓"), count),
+    h("div", { class: "row" }, input, h("button", { type: "button", class: "btn btn-small", "aria-label": t("pj.tr.prev"), title: t("pj.tr.prev"), onclick: () => gotoHit(-1) }, "↑"), h("button", { type: "button", class: "btn btn-small", "aria-label": t("pj.tr.next"), title: t("pj.tr.next"), onclick: () => gotoHit(1) }, "↓"), count),
     chips.length > 0 ? h("div", { class: "row" }, h("span", { class: "hint" }, t("pj.tr.highlights")), ...chips) : null,
     body,
     h("section", { class: "ed-block" }, silences.el),

@@ -10,7 +10,7 @@ export async function homeView(navigate: (path: string) => void): Promise<HTMLEl
   const config = await publicApi.config().catch(() => null);
   const missing = supported();
 
-  const name = h("input", { id: "host-name", type: "text", maxlength: "60", autocomplete: "name", placeholder: t("home.form.namePlaceholder"), "data-testid": "host-name" });
+  const name = h("input", { id: "host-name", type: "text", required: true, pattern: ".*\\S.*", maxlength: "60", autocomplete: "name", placeholder: t("home.form.namePlaceholder"), "data-testid": "host-name" });
   const key = h("input", { id: "create-key", type: "password", autocomplete: "off", "data-testid": "create-key" });
   const error = h("div", { class: "form-error", role: "alert", "data-testid": "home-error" });
   const submit = h("button", { type: "submit", class: "btn btn-primary", "data-testid": "create-session" }, t("home.form.create"));
@@ -21,10 +21,6 @@ export async function homeView(navigate: (path: string) => void): Promise<HTMLEl
       class: "stack",
       onsubmit: (event: Event) => {
         event.preventDefault();
-        if (!name.value.trim()) {
-          name.focus();
-          return;
-        }
         submit.disabled = true;
         submit.textContent = t("home.form.creating");
         error.textContent = "";
@@ -43,7 +39,13 @@ export async function homeView(navigate: (path: string) => void): Promise<HTMLEl
           .catch((cause: unknown) => {
             submit.disabled = false;
             submit.textContent = t("home.form.create");
-            error.textContent = cause instanceof ApiError && cause.code === "create_key_invalid" ? t("home.form.keyHint") : t("err.generic", { message: cause instanceof Error ? cause.message : "?" });
+            if (cause instanceof ApiError && cause.code === "create_key_invalid") {
+              error.textContent = t("home.form.keyInvalid");
+              key.focus();
+              key.select();
+            } else {
+              error.textContent = t("err.generic", { message: cause instanceof Error ? cause.message : "?" });
+            }
           });
       },
     },

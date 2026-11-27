@@ -160,7 +160,7 @@ test("layout of a two-camera program: scenes, live preview, manual scenes, undo,
     await first.getByTestId("pj-lay-scene-layout").selectOption("grid");
     await expect(first).toHaveAttribute("data-state", "manual");
     await expect(first).toHaveAttribute("data-layout", "grid");
-    await expect(page.getByTestId("pj-lay-summary")).toContainText("1 changed by hand");
+    await expect(page.getByTestId("pj-lay-summary")).toContainText("changed by hand: 1");
     await saved(page);
 
     await page.getByTestId("pj-lay-summary").click(); // focus moves into the panel

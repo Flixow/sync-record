@@ -7,6 +7,7 @@ import type { ChaptersReport, ExportRecord, ProjectApi, ProjectState, PublishDra
 import { formatBytes } from "../lib/storage-math.js";
 import { formatClock } from "../lib/time.js";
 import { t } from "../i18n/index.js";
+import { failureBanner, progressBar } from "./job-status.js";
 import { banner } from "./layout.js";
 
 const ACTIVE = new Set(["queued", "running"]);
@@ -296,11 +297,11 @@ export function publishPanel(api: ProjectApi, hooks: PublishPanelHooks): Publish
         ? h(
             "div",
             { class: "stack" },
-            h("div", { class: "bar", role: "progressbar", "aria-valuenow": String(Math.round(job.progress * 100)) }, h("div", { class: "bar-fill", style: `width:${Math.round(job.progress * 100)}%` })),
+            progressBar(Math.round(job.progress * 100), t("pj.pub.thumb"), job.stage),
             h("p", { class: "hint", "data-testid": "pj-pub-thumb-progress", "data-status": job.status }, t("pj.pub.thumb.progress", { percent: Math.round(job.progress * 100) })),
           )
         : null,
-      job?.status === "failed" ? banner("error", t("pj.pub.thumb.failed", { message: job.error ?? "?" }), "pj-pub-thumb-error") : null,
+      job?.status === "failed" ? failureBanner("pj.pub.thumb.failed", job.error, "pj-pub-thumb-error") : null,
       record
         ? h(
             "figure",

@@ -15,7 +15,7 @@ function langButton(lang: Lang): HTMLButtonElement {
   );
 }
 
-export function header(extra?: Node): HTMLElement {
+export function header(): HTMLElement {
   return h(
     "header",
     { class: "topbar" },
@@ -25,7 +25,7 @@ export function header(extra?: Node): HTMLElement {
       h("img", { src: "/logo.svg", alt: "", width: "32", height: "32" }),
       h("span", { class: "brand-name" }, t("brand.name")),
     ),
-    h("div", { class: "topbar-right" }, extra ?? null, h("div", { class: "lang", role: "group", "aria-label": t("lang.label") }, langButton("en"), langButton("pl"))),
+    h("div", { class: "topbar-right" }, h("div", { class: "lang", role: "group", "aria-label": t("lang.label") }, langButton("en"), langButton("pl"))),
   );
 }
 
@@ -35,6 +35,14 @@ export function page(...children: (Node | null)[]): HTMLElement {
 
 export function card(title: string | null, ...children: (Node | null)[]): HTMLElement {
   return h("section", { class: "card" }, title ? h("h2", {}, title) : null, ...children);
+}
+
+export function scrollable(table: HTMLElement): HTMLElement {
+  return h("div", { class: "table-scroll" }, table);
+}
+
+export function srOnly(text: string): HTMLElement {
+  return h("span", { class: "sr-only" }, text);
 }
 
 export function banner(kind: "info" | "warn" | "error" | "ok", text: string, testId?: string): HTMLElement {
