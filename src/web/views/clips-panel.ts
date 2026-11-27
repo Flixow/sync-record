@@ -6,7 +6,7 @@ import type { JobRecord } from "../../shared/project.js";
 import type { TranscriptFile } from "../../shared/transcript.js";
 import { ApiError } from "../lib/api.js";
 import { h, setChildren } from "../lib/dom.js";
-import type { ClipsFile, ProjectApi, ProjectState } from "../lib/project-api.js";
+import type { ClipsFile, ClipSuggestions, ProjectApi, ProjectState } from "../lib/project-api.js";
 import { formatClock } from "../lib/time.js";
 import { getLang, t } from "../i18n/index.js";
 import { captionStyleSelect } from "./caption-style-select.js";
@@ -50,6 +50,7 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
   let suggestions: ClipSuggestion[] = [];
   let cards: HTMLElement[] = [];
   let note: HTMLElement | null = null;
+  let source: ClipSuggestions["source"] = "rule";
   let searching = false;
   let suggested = false;
   let playable = false;
@@ -78,10 +79,12 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
         const [result, file] = await Promise.all([api.suggestClips(DEFAULT_CLIP_LIMIT, llmToggle.checked), api.transcript()]);
         transcript = file;
         suggestions = result.suggestions;
+        source = result.source;
         suggested = true;
         const llm = result.llmUsed ? "used" : result.llmAvailable ? "failed" : "unavailable";
         note = llmToggle.checked ? banner(llm === "used" ? "info" : "warn", t(`pj.cl.llm.${llm}`), "pj-cl-llm-note") : null;
         note?.setAttribute("data-state", llm);
+        if (result.llmFailure !== null) note?.setAttribute("data-failure", result.llmFailure);
       } finally {
         searching = false;
         if (!disposed) {
@@ -117,6 +120,8 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
       "article",
       { class: "clip-card", "data-testid": "pj-cl-card", "data-id": clip.id, "data-start": String(clip.s), "data-end": String(clip.e) },
       h("h4", {}, clip.title),
+      clip.hook ? h("p", { class: "clip-hook", "data-testid": "pj-cl-hook" }, `“${clip.hook}”`) : null,
+      clip.why ? h("p", { class: "hint", "data-testid": "pj-cl-why" }, clip.why) : null,
       h(
         "p",
         { class: "hint", "data-testid": "pj-cl-range" },
@@ -152,6 +157,7 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
       searching ? h("p", { class: "hint", "data-testid": "pj-cl-searching" }, t("pj.cl.suggesting")) : null,
       note,
       suggested && !searching ? h("h4", {}, t("pj.cl.found", { count: suggestions.length })) : null,
+      suggested && !searching && suggestions.length > 0 ? h("p", { class: "hint", "data-testid": "pj-cl-source", "data-source": source }, t(`pj.cl.source.${source}`)) : null,
       suggested && !searching && suggestions.length === 0 ? h("p", { class: "hint", "data-testid": "pj-cl-none" }, t("pj.cl.none")) : null,
       ...(searching ? [] : suggestions.map((_, index) => buildCard(index))),
     );

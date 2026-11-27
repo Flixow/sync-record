@@ -343,6 +343,7 @@ canvas.timeline { display: block; width: 100%; height: 76px; border: 1px solid v
 .clip-card { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.9rem 1rem; border: 1px solid var(--input-border); border-radius: var(--r-base); background: rgb(255 255 255 / 70%); }
 .clip-card h4 { margin: 0; }
 .clip-card p { margin: 0; }
+.clip-hook { font-style: italic; }
 .clip-reasons { margin: 0; padding-left: 1.1rem; font-size: 0.88rem; color: var(--muted); }
 .clip-text { margin: 0; padding-left: 0.75rem; border-left: 3px solid var(--hairline); white-space: pre-line; font-size: 0.9rem; }
 .clip-nudge { gap: 0.4rem; }

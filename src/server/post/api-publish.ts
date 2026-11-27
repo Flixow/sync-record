@@ -5,6 +5,7 @@ import { chaptersForYoutube, formatChapters, validateChapters, wordsThroughEdl }
 import { adjustRange, DEFAULT_CLIP_LIMIT, suggestClips, type ClipProject } from "../../shared/clips.js";
 import { presetById } from "../../shared/presets.js";
 import type { ProjectFile } from "../../shared/project.js";
+import { SHORTS_DEFAULT_COUNT } from "../../shared/shorts.js";
 import { draftTitleAndDescription, thumbnailCandidates, thumbnailSpec, type ThumbnailKind } from "../../shared/publish.js";
 import type { TranscriptFile } from "../../shared/transcript.js";
 import { HttpError } from "../errors.js";
@@ -12,7 +13,8 @@ import * as v from "../validate.js";
 import { readEdl } from "./edl-store.js";
 import type { Http } from "./api.js";
 import type { PostProduction } from "./index.js";
-import { createLlmClient, llmChapterTitles, llmDraft, rerankWithLlm } from "./llm.js";
+import { agentClips } from "./shorts-agent.js";
+import { createLlmClient, DEFAULT_SHORTS_TIMEOUT_MS, llmChapterTitles, llmDraft } from "./llm.js";
 import { writeJson } from "./projects.js";
 import { TRANSCRIPT_FILE } from "./transcribe.js";
 
@@ -109,14 +111,16 @@ export async function handlePublishRoutes(post: PostProduction, sid: string, res
     const body = await http.readJson(req);
     const transcript = await transcriptOf(post, sid);
     const limit = body.limit === undefined ? DEFAULT_CLIP_LIMIT : Math.min(50, v.nonNegativeInt(body.limit, "limit"));
-    const levels = await speakerLevels(project, dir);
-    let suggestions = suggestClips({ words: transcript.words, levels, highlights: project.highlights.map((h) => ({ tMs: h.atMs })), durationMs: project.durationMs, limit }, { lang: languageOf(transcript) });
-    // the language model only re-orders: it is off unless the host configured one and the request asks for it
+    const highlights = project.highlights.map((h) => ({ tMs: h.atMs }));
+    // the language model cuts the clips (one request, transcript text only): it is off unless the host configured one and the request asks for it
     const llm = createLlmClient(body.llm === true ? post.config.post.llm : null);
-    const reranked = llm.enabled ? await rerankWithLlm(suggestions, transcript.words, llm) : suggestions;
-    const llmUsed = llm.enabled && reranked !== suggestions;
-    suggestions = reranked;
-    http.json(res, 200, { suggestions, llmUsed, llmAvailable: post.config.post.llm !== null, llmFailure: llmUsed ? null : (llm.lastFailure ?? null) });
+    const agent = llm.enabled
+      ? await agentClips(llm, { words: transcript.words, highlights, durationMs: project.durationMs, count: body.count === undefined ? SHORTS_DEFAULT_COUNT : v.nonNegativeInt(body.count, "count"), timeoutMs: post.config.post.llm?.shortsTimeoutMs ?? DEFAULT_SHORTS_TIMEOUT_MS })
+      : null;
+    // no usable answer from the model: the rules cut the clips, as they always did, and the reason is in `llmFailure`
+    const llmUsed = agent !== null && agent.failure === null;
+    const suggestions = agent !== null && llmUsed ? agent.clips : suggestClips({ words: transcript.words, levels: await speakerLevels(project, dir), highlights, durationMs: project.durationMs, limit }, { lang: languageOf(transcript) });
+    http.json(res, 200, { suggestions, source: llmUsed ? "agent" : "rule", llmUsed, llmAvailable: post.config.post.llm !== null, llmFailure: agent?.failure ?? null });
     return true;
   }
   if (rest[0] === "clips" && rest[1] === "adjust" && rest.length === 2 && method === "POST") {

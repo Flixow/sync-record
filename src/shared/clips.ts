@@ -1,6 +1,7 @@
 // Clip suggestions: short stretches of a recording that work on their own (a question and its answer, a lively exchange,
-// a moment somebody flagged). Pure, deterministic and heuristic: no model is needed, and a local model can only re-rank the
-// result (src/server/post/llm.ts). Every clip starts on the first word of a sentence and ends on the last word of one.
+// a moment somebody flagged). Pure, deterministic and heuristic: no model is needed. This is the path that runs when no model
+// is configured or the shorts agent fails (src/shared/shorts.ts, src/server/post/shorts-agent.ts, which lets a model cut the
+// clips and validates what it says). Every clip starts on the first word of a sentence and ends on the last word of one.
 
 import { keepOnly, type Edl } from "./edl.js";
 import { isBackchannel, ABBREVIATION_SOFT, ABBREVIATION_TITLES, capitalize, detectLanguage, joinWords, startsWithConnective, trimTo, type Lang } from "./lexicon.js";
@@ -202,6 +203,7 @@ export const REASON_TEXT: Record<string, { en: string; pl: string }> = {
   "dense-speech": { en: "Almost no pauses.", pl: "Prawie bez przerw." },
   "complete-thought": { en: "Starts and ends on a complete thought.", pl: "Zaczyna się i kończy pełną myślą." },
   "good-length": { en: "A good length for a short clip.", pl: "Dobra długość na krótki klip." },
+  agent: { en: "Cut by the language model: a strong opening and a story that stands on its own.", pl: "Wycięte przez model językowy: mocne otwarcie i zamknięta historia." },
 };
 
 export interface ClipSuggestion {
@@ -217,6 +219,12 @@ export interface ClipSuggestion {
   title: string;
   /** Participant ids in order of their first word. */
   speakers: string[];
+  /** Set when the language model cut this clip (src/shared/shorts.ts): its title is the model's and is kept when the in or out point moves. */
+  source?: "agent";
+  /** What the viewer hears first, in the model's words (agent clips only), at most 120 characters. */
+  hook?: string;
+  /** One sentence from the model on why this stretch works as a short (agent clips only), at most 200 characters. */
+  why?: string;
 }
 
 /** A clip as its own project: it has an EDL of its own (keep only the clip range) and is exported on its own. */
@@ -587,12 +595,12 @@ export function wordStep(range: { s: number; e: number }, words: TranscriptWord[
   return edge === "s" ? { sMs: to } : { eMs: to };
 }
 
-/** A suggestion with new in and out points (see adjustRange); its title and speakers follow the new range, its score and reasons stay. */
+/** A suggestion with new in and out points (see adjustRange); its title (unless the model wrote it) and speakers follow the new range, its score and reasons stay. */
 export function adjustClip(clip: ClipSuggestion, words: TranscriptWord[], change: { sMs?: number; eMs?: number }): ClipSuggestion {
   const range = adjustRange(clip, words, change);
   const sentences = splitSentences(words).filter((sentence) => sentence.s >= range.s && sentence.e <= range.e);
   const lang = detectLanguage(words);
-  const title = sentences.length > 0 ? titleOf(sentences, lang) : trimTo(capitalize(joinWords(clipWords(words, range))), TITLE_MAX_CHARS);
+  const title = clip.source === "agent" ? clip.title : sentences.length > 0 ? titleOf(sentences, lang) : trimTo(capitalize(joinWords(clipWords(words, range))), TITLE_MAX_CHARS);
   const speakers = sentences.length > 0 ? speakersOf(sentences) : [...new Set(clipWords(words, range).map((word) => word.pid))];
   return { ...clip, id: `clip-${range.s}-${range.e}`, s: range.s, e: range.e, title, speakers };
 }
