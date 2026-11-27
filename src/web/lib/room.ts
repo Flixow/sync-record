@@ -558,7 +558,8 @@ export class Room {
           clockSamples: samples,
           settings: streamSettings(stream),
           onEnded: (recorder, reason) => this.onRecorderEnded(recorder, reason),
-          onError: (_recorder, error) => this.notice("error", t("err.disk", { message: error instanceof Error ? error.message : String(error) })),
+          onError: (_recorder, error, cause) =>
+            this.notice("error", t(cause === "storage" ? "err.disk" : "err.recorder", { message: error instanceof Error ? error.message : String(error) })),
         });
 
       const wanted: [TrackKind, MediaStream][] = [["audio", mic]];

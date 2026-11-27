@@ -39,7 +39,10 @@ const progressText = (job: JobRecord): string => `${percentOf(job)}% ${stageLabe
 
 function driftWarnings(project: ProjectFile): HTMLElement[] {
   return project.sources
-    .filter((source) => !source.driftApplied && Math.abs(source.driftPpm) > DEFAULT_DRIFT_OPTIONS.maxPpm)
+    .filter(
+      (source) =>
+        !source.driftApplied && Math.abs(source.driftPpm) > DEFAULT_DRIFT_OPTIONS.maxPpm && source.timelineDurationMs >= DEFAULT_DRIFT_OPTIONS.minSpanSec * 1000,
+    )
     .map((source) => {
       const seconds = formatNumber((Math.abs(source.driftPpm) * source.timelineDurationMs) / 1e9, 1);
       return banner("warn", t(source.driftPpm < 0 ? "pj.drift.shorter" : "pj.drift.longer", { track: trackName(source), seconds }), "pj-drift-warning");

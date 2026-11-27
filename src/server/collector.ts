@@ -30,9 +30,10 @@ import { freeBytes } from "./post/jobs.js";
 const MARKER_LEAD_MS = 3000;
 export const CLAIM_TTL_MS = CLAIM_MINUTES * 60_000;
 const PART_NAME = /^\d{12}$/;
-const MAX_TRACKS_PER_PARTICIPANT = 30;
+const MAX_TRACKS_PER_PARTICIPANT = 300;
 const MAX_STREAMS_PER_PARTICIPANT = 3;
 const TIMING_WINDOW_MS = 24 * 3_600_000;
+const INGEST_MIN_FREE_BYTES = 256 * 1024 * 1024;
 
 interface Presence {
   state: PresenceState;
@@ -353,16 +354,15 @@ export class Collector {
 
   private assertPlausibleTiming(record: SessionRecord, request: DeclareTrackRequest): void {
     const invalid = (field: string): HttpError => new HttpError(400, "invalid_field", { field });
-    if (Math.abs(request.offsetMs) > TIMING_WINDOW_MS) throw invalid("offsetMs");
     const startServerMs = request.startClientMs + request.offsetMs;
     if (startServerMs < record.createdAtMs - TIMING_WINDOW_MS || startServerMs > nowMs() + TIMING_WINDOW_MS) throw invalid("startClientMs");
-    if (request.clockSamples.some((sample) => Math.abs(sample.offsetMs) > TIMING_WINDOW_MS)) throw invalid("clockSamples");
+    if (request.clockSamples.some((sample) => Math.abs(sample.offsetMs - request.offsetMs) > TIMING_WINDOW_MS)) throw invalid("clockSamples");
   }
 
   private async assertDiskRoom(): Promise<void> {
     if (this.config.storageDriver !== "local") return;
     const free = await freeBytes(this.config.localDir).catch(() => null);
-    const required = this.config.post.minFreeBytes;
+    const required = INGEST_MIN_FREE_BYTES;
     if (free !== null && free < required) throw new HttpError(507, "disk_low", { freeBytes: free, requiredBytes: required });
   }
 

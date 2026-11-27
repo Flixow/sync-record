@@ -24,7 +24,7 @@ export interface RecorderInit {
   clockSamples: RecordingMeta["declareSamples"];
   settings: RecordingMeta["settings"];
   onEnded: (recorder: TrackRecorder, reason: EndReason) => void;
-  onError: (recorder: TrackRecorder, error: unknown) => void;
+  onError: (recorder: TrackRecorder, error: unknown, cause: "storage" | "encoder") => void;
 }
 
 /**
@@ -94,7 +94,7 @@ export class TrackRecorder {
     recorder.ondataavailable = (event) => {
       if (event.data.size === 0) return;
       this.recording.append(event.data).catch((error: unknown) => {
-        this.init.onError(this, error);
+        this.init.onError(this, error, "storage");
         void this.stop("error");
       });
     };
@@ -108,11 +108,11 @@ export class TrackRecorder {
     meta.startCallClientMs = clientNowMs();
     recorder.start(TIMESLICE_MS);
     await started;
-    await this.recording.saveMeta();
     recorder.onerror = (event) => {
-      this.init.onError(this, (event as ErrorEvent).error ?? new Error("recorder error"));
+      this.init.onError(this, (event as ErrorEvent).error ?? new Error("recorder error"), "encoder");
       void this.stop("error");
     };
+    await this.recording.saveMeta();
   }
 
   get active(): boolean {

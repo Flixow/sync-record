@@ -187,6 +187,7 @@ export const en = {
   "err.generic": "Something went wrong: {message}",
   "err.codec": "This browser cannot record WebM for {kind}. Use a recent Chrome, Edge or Brave.",
   "err.start": "Recording could not start: {message}",
+  "err.recorder": "The recorder stopped: {message}. What was recorded so far is saved.",
   "err.disk": "Writing to local storage failed: {message}. Free disk space and start again.",
   "err.server": "The server cannot be reached. Anything you record stays on this computer and uploads resume automatically.",
   "err.clockUnavailable": "The server clock could not be read. Recording starts anyway; start times are less precise until the connection is back.",

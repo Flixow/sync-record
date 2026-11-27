@@ -187,6 +187,7 @@ export const pl: Record<MessageKey, string> = {
   "err.generic": "Coś poszło nie tak: {message}",
   "err.codec": "Ta przeglądarka nie nagra WebM dla „{kind}”. Użyj aktualnego Chrome, Edge lub Brave.",
   "err.start": "Nie udało się uruchomić nagrywania: {message}",
+  "err.recorder": "Nagrywanie zatrzymało się: {message}. To, co zdążyło się nagrać, jest zapisane.",
   "err.disk": "Zapis w pamięci lokalnej nie powiódł się: {message}. Zwolnij miejsce na dysku i zacznij ponownie.",
   "err.server": "Nie można połączyć się z serwerem. Wszystko, co nagrasz, zostaje na tym komputerze, a wysyłanie wznowi się samo.",
   "err.clockUnavailable": "Nie udało się odczytać zegara serwera. Nagrywanie rusza mimo to; czasy startu będą mniej dokładne, dopóki nie wróci połączenie.",
