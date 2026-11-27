@@ -15,6 +15,13 @@ export function str(value: unknown, field: string, max: number, min = 1): string
   return trimmed;
 }
 
+export function displayName(value: unknown, field: string, max: number): string {
+  if (typeof value !== "string") throw bad(field);
+  const cleaned = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").replace(/\s+/gu, " ").trim();
+  if (cleaned.length < 1 || cleaned.length > max) throw bad(field);
+  return cleaned;
+}
+
 export function num(value: unknown, field: string): number {
   if (typeof value !== "number" || !Number.isFinite(value)) throw bad(field);
   return value;

@@ -148,7 +148,7 @@ a { color: var(--brand-text); }
 .brand { display: inline-flex; align-items: center; gap: 0.6rem; text-decoration: none; color: var(--text); font-weight: 650; letter-spacing: -0.02em; }
 .brand img { border-radius: 9px; display: block; }
 .topbar-right { display: flex; align-items: center; gap: 1rem; min-width: 0; }
-.session-tag { font-family: var(--mono); font-size: 0.8rem; color: var(--muted); }
+.page-title { margin: 0 0 1rem; font-size: 1.35rem; }
 .lang { display: inline-flex; border: 1px solid var(--hairline); border-radius: var(--r-control); padding: 2px; background: rgb(255 255 255 / 55%); }
 .lang-btn { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 0.8rem; font-weight: 600; padding: 0.25rem 0.7rem; border-radius: var(--r-sm); cursor: pointer; transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
 .lang-btn:hover:not(.active) { color: var(--brand-text); }
@@ -207,7 +207,11 @@ input[type="text"]:focus-visible, input[type="password"]:focus-visible, input[ty
 .banner-warn { background: var(--warn-soft); color: var(--warn); border-color: rgb(146 64 14 / 22%); }
 .banner-error { background: var(--danger-soft); color: var(--danger); border-color: rgb(185 28 28 / 22%); }
 .banner p { margin: 0.25rem 0 0.5rem; }
-.banner-close { position: absolute; right: 0.5rem; top: 0.35rem; border: 0; background: transparent; font-size: 1.1rem; cursor: pointer; color: inherit; }
+.banner:has(.banner-close) { padding-right: 2.75rem; }
+.banner-close { position: absolute; right: 0.25rem; top: 0.25rem; min-width: 32px; min-height: 32px; border: 0; background: transparent; font-size: 1.1rem; cursor: pointer; color: inherit; }
+.banner details { margin-top: 0.4rem; }
+.banner summary { cursor: pointer; font-weight: 600; }
+.job-raw { margin: 0.4rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 0.8rem; }
 .banners { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1rem; }
 /* The one celebration of the app: the accent gradient of the design skill, as a hairline on the "everything is uploaded" banner. */
 .banner[data-testid="finished-done"]::after { content: ""; position: absolute; left: 0.9rem; right: 0.9rem; bottom: -1px; height: 3px; border-radius: 3px; background: linear-gradient(90deg, #c026d3, #ec4899, #f97316); }
@@ -247,6 +251,8 @@ input[type="text"]:focus-visible, input[type="password"]:focus-visible, input[ty
 .local-row .row { grid-column: 1 / -1; }
 .result-row { display: flex; align-items: center; gap: 0.7rem; padding: 0.4rem 0; flex-wrap: wrap; }
 
+.table-scroll { overflow-x: auto; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .data-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 .data-table th { text-align: left; font-weight: 600; color: var(--muted); padding: 0.35rem 0.6rem 0.35rem 0; border-bottom: 1px solid var(--hairline); }
 .data-table td { padding: 0.45rem 0.6rem 0.45rem 0; border-bottom: 1px solid var(--hairline); }
@@ -277,7 +283,7 @@ input[type="text"]:focus-visible, input[type="password"]:focus-visible, input[ty
 /* Post-production: transcript that follows the player */
 .transcript { max-height: 22rem; overflow: auto; padding: 0.75rem 1rem; border: 1px solid var(--input-border); border-radius: var(--r-control); background: rgb(255 255 255 / 88%); line-height: 1.7; }
 .transcript .turn { margin: 0 0 0.9rem; }
-.transcript .turn-head { display: block; font: inherit; font-size: 0.78rem; font-weight: 700; color: var(--brand-text); background: none; border: 0; padding: 0; cursor: pointer; }
+.transcript .turn-head { display: block; font: inherit; font-size: 0.78rem; font-weight: 700; color: var(--brand-text); background: none; border: 0; padding: 0.2rem 0; min-height: 24px; cursor: pointer; }
 .transcript .w { cursor: pointer; border-radius: 3px; user-select: none; -webkit-user-select: none; }
 .transcript .w:hover { background: var(--brand-soft); }
 .transcript .w.sel { background: var(--brand-soft); box-shadow: 0 0 0 1px var(--brand); }

@@ -11,6 +11,7 @@ import {
 } from "../../shared/layout.js";
 import { sceneAt, type Scene } from "../../shared/scenes.js";
 import { h } from "../lib/dom.js";
+import { t } from "../i18n/index.js";
 import type { Stage } from "./stage.js";
 
 /** The long edge of the preview canvas in CSS pixels. */
@@ -81,7 +82,7 @@ export function layoutPreview(stage: Stage, sources: PreviewSource[], initial: P
   const { audio } = stage;
   let state = initial;
   const entries = new Map<string, Entry>();
-  const container = h("div", { class: "lay-canvas", "data-testid": "pj-lay-canvas", role: "img" });
+  const container = h("div", { class: "lay-canvas", "data-testid": "pj-lay-canvas", role: "img", "aria-label": t("pj.lay.preview") });
   const backdropLayer = h("div", { class: "lay-backdrop" });
   container.append(backdropLayer);
   for (const source of sources) {

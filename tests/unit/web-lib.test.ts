@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { bestSample, computeSample } from "../../src/web/lib/clock.js";
 import { analyseBleed, guessHeadphones, BLEED_THRESHOLD_DB } from "../../src/web/lib/headphones.js";
+import { formatNumber } from "../../src/web/lib/number.js";
 import { bytesPerSecond, formatBytes, formatDuration, minutesLeft, plannedBytes, storageLevel } from "../../src/web/lib/storage-math.js";
 
 describe("clock handshake", () => {
@@ -81,5 +82,19 @@ describe("storage warning maths", () => {
     expect(formatBytes(5 * 1024 ** 3)).toBe("5.0 GB");
     expect(formatDuration(65)).toBe("01:05");
     expect(formatDuration(3725)).toBe("1:02:05");
+  });
+});
+
+describe("number formatting", () => {
+  it("uses the decimal separator of the language and fixed digits", () => {
+    expect(formatNumber(1.5, 1, "pl")).toBe("1,5");
+    expect(formatNumber(1.5, 1, "en")).toBe("1.5");
+    expect(formatNumber(3, 1, "pl")).toBe("3,0");
+  });
+
+  it("never groups digits and never prints a negative zero", () => {
+    expect(formatNumber(12345.678, 2, "pl")).toBe("12345,68");
+    expect(formatNumber(-0.04, 1, "en")).toBe("0.0");
+    expect(formatNumber(-3537, 0, "en")).toBe("-3537");
   });
 });

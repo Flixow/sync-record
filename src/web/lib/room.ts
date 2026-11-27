@@ -558,7 +558,8 @@ export class Room {
           clockSamples: samples,
           settings: streamSettings(stream),
           onEnded: (recorder, reason) => this.onRecorderEnded(recorder, reason),
-          onError: (_recorder, error) => this.notice("error", t("err.disk", { message: error instanceof Error ? error.message : String(error) })),
+          onError: (_recorder, error, cause) =>
+            this.notice("error", t(cause === "storage" ? "err.disk" : "err.recorder", { message: error instanceof Error ? error.message : String(error) })),
         });
 
       const wanted: [TrackKind, MediaStream][] = [["audio", mic]];
@@ -643,8 +644,22 @@ export class Room {
     if (this.recordingKinds.length > 0) await this.clock.finalSample();
     await Promise.all(this.recorders.filter((recorder) => recorder.active).map((recorder) => recorder.stop(reason)));
     if (this.phase === "recording") this.finishRecording();
-    if (this.ended) this.phase = "finished";
+    if (this.ended) {
+      this.phase = "finished";
+      this.releasePreview();
+    }
     this.notify();
+  }
+
+  private releasePreview(): void {
+    this.stopLevel?.();
+    this.stopLevel = null;
+    this.micStream?.getTracks().forEach((track) => track.stop());
+    this.micStream = null;
+    this.camStream?.getTracks().forEach((track) => track.stop());
+    this.camStream = null;
+    this.previewCamera = null;
+    this.level = 0;
   }
 
   /** Back to setup after a take: devices must be opened again. */

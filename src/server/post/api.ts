@@ -274,7 +274,13 @@ export async function postRoutes(post: PostProduction, http: Http, req: Incoming
   }
   if (rest[0] === "media" && rest.length > 1 && (method === "GET" || method === "HEAD")) {
     await post.store.require(sid);
-    await serveProjectFile(req, res, post.store.dir(sid), decodeURIComponent(rest.slice(1).join("/")));
+    let relative: string;
+    try {
+      relative = decodeURIComponent(rest.slice(1).join("/"));
+    } catch {
+      throw new HttpError(400, "bad_path");
+    }
+    await serveProjectFile(req, res, post.store.dir(sid), relative);
     return true;
   }
   return false;

@@ -48,7 +48,7 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
   const hpCheck = checkbox("hp-confirm", (checked) => room.setHeadphones(checked ? "yes" : "unset"));
   const consentCheck = checkbox("consent", (checked) => room.setConsent(checked));
   const meterFill = h("div", { class: "meter-fill" });
-  const meter = h("div", { class: "meter", role: "meter" }, meterFill);
+  const meter = h("div", { class: "meter", role: "meter", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": "0" }, meterFill);
   const preview = h("video", { class: "preview", playsinline: true, autoplay: true, "data-testid": "camera-preview" });
   preview.muted = true;
 
@@ -74,7 +74,7 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
   const refreshButton = button("refresh-results", "btn btn-small", () => void room.pollResults());
   const copyButton = button("copy-invite", "btn btn-small", () => undefined);
   const retryLockButton = button("retry-lock", "btn btn-small", () => void room.retryLock());
-  const inviteInput = h("input", { type: "text", readonly: true, "data-testid": "invite-link" });
+  const inviteInput = h("input", { type: "text", readonly: true, "aria-label": t("room.invite.label"), "data-testid": "invite-link" });
   inviteInput.addEventListener("focus", () => inviteInput.select());
   const copiedNote = h("span", { class: "hint", role: "status" });
   const timerEl = h("span", { class: "timer", "data-testid": "rec-timer" });
@@ -121,7 +121,7 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
   });
   setupEndButton.textContent = t("rec.end");
   setupCard.append(h("div", { class: "row end-row" }, setupEndButton));
-  const recordingCard = card(null, recordingBody);
+  const recordingCard = card(t("rec.title"), recordingBody);
   const finishedCard = card(t("fin.title"), finishedBody);
   const resultsCard = card(t("res.title"), h("p", { class: "hint" }, t("res.body")), resultsList);
   const rosterCard = card(t("roster.title"), rosterBody);
@@ -408,7 +408,7 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
   function update(): void {
     const blocks: Node[] = [];
     if (room.missingFeatures.length > 0) blocks.push(banner("error", t("room.unsupported", { missing: room.missingFeatures.join(", ") }), "unsupported"));
-    if (room.fatal === "invalid") blocks.push(banner("error", t("join.invalid"), "fatal"));
+    if (room.fatal === "invalid") blocks.push(banner("error", t(room.recordings.length > 0 ? "room.expired" : "join.invalid"), "fatal"));
     if (room.fatal === "notFound") blocks.push(banner("error", t("join.notFound"), "fatal"));
     if (room.lock === "blocked") {
       blocks.push(h("div", { class: "banner banner-warn", "data-testid": "lock-blocked" }, h("strong", {}, t("room.lock.title")), h("p", {}, t("room.lock.body")), retryLockButton));
@@ -418,7 +418,7 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
     if (!room.online) blocks.push(banner("warn", t("err.server"), "offline"));
     for (const notice of room.notices) {
       const el = banner(notice.kind, notice.text, "notice");
-      const close = h("button", { type: "button", class: "banner-close", "aria-label": "×" }, "×");
+      const close = h("button", { type: "button", class: "banner-close", "aria-label": t("common.dismiss") }, "×");
       close.addEventListener("click", () => room.dismissNotice(notice.id));
       el.append(close);
       blocks.push(el);
@@ -456,12 +456,19 @@ export function roomView(room: Room): { el: HTMLElement; update: () => void } {
     updateInvite();
   }
 
+  let meterAriaAt = 0;
   const stopLevel = room.onLevel((level) => {
-    meterFill.style.width = `${Math.round(level * 100)}%`;
+    const percent = Math.round(level * 100);
+    meterFill.style.width = `${percent}%`;
+    const now = performance.now();
+    if (now - meterAriaAt >= 250) {
+      meterAriaAt = now;
+      meter.setAttribute("aria-valuenow", String(percent));
+    }
   });
 
-  const sessionTag = h("span", { class: "session-tag", "data-testid": "session-id" }, t("room.session", { id: room.sid.slice(0, 8) }));
-  const el = h("div", { class: "shell" }, header(sessionTag), h("main", { class: "page room" }, banners, h("div", { class: "room-grid" }, h("div", { class: "main-col" }, setupCard, recordingCard, finishedCard, resultsCard), h("div", { class: "side-col" }, inviteCard, rosterCard, localCard))));
+  const heading = h("h1", { class: "page-title", "data-testid": "session-id" }, t("room.session", { id: room.sid.slice(0, 8) }));
+  const el = h("div", { class: "shell" }, header(), h("main", { class: "page room" }, heading, banners, h("div", { class: "room-grid" }, h("div", { class: "main-col" }, setupCard, recordingCard, finishedCard, resultsCard), h("div", { class: "side-col" }, inviteCard, rosterCard, localCard))));
 
   // Elapsed time and the clap prompt refresh once a second while recording.
   const ticker = window.setInterval(() => {

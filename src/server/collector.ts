@@ -25,10 +25,15 @@ import type { ParticipantRecord, SessionRecord, TrackRecord } from "./model.js";
 import { remuxTrack } from "./remux.js";
 import type { Storage } from "./storage/index.js";
 import { issueToken, type TokenClaims } from "./tokens.js";
+import { freeBytes } from "./post/jobs.js";
 
 const MARKER_LEAD_MS = 3000;
 export const CLAIM_TTL_MS = CLAIM_MINUTES * 60_000;
 const PART_NAME = /^\d{12}$/;
+const MAX_TRACKS_PER_PARTICIPANT = 300;
+const MAX_STREAMS_PER_PARTICIPANT = 3;
+const TIMING_WINDOW_MS = 24 * 3_600_000;
+const INGEST_MIN_FREE_BYTES = 256 * 1024 * 1024;
 
 interface Presence {
   state: PresenceState;
@@ -248,6 +253,9 @@ export class Collector {
       return this.trackState(sid, pid, existing.id);
     }
     if (runtime.record.endedAtMs !== null) throw new HttpError(409, "session_ended");
+    if (runtime.record.tracks.filter((track) => track.pid === pid).length >= MAX_TRACKS_PER_PARTICIPANT) throw new HttpError(409, "too_many_tracks");
+    this.assertPlausibleTiming(runtime.record, request);
+    await this.assertDiskRoom();
     const segment = runtime.record.tracks.filter((track) => track.pid === pid && track.kind === request.kind).length + 1;
     runtime.record.tracks.push({
       id: request.trackId,
@@ -294,6 +302,7 @@ export class Collector {
       if (end <= state.received) return { received: state.received };
       if (track.finalized) throw new HttpError(409, "track_finalized", { received: state.received });
       const fresh = body.subarray(state.received - offset);
+      await this.assertDiskRoom();
       await this.storage.put(partKey(sid, pid, tid, state.received), fresh);
       state.received += fresh.length;
       return { received: state.received };
@@ -329,6 +338,10 @@ export class Collector {
     });
     const set = runtime.streams.get(pid) ?? new Set<ServerResponse>();
     runtime.streams.set(pid, set);
+    if (set.size >= MAX_STREAMS_PER_PARTICIPANT) {
+      const oldest = set.values().next().value;
+      if (oldest) oldest.end();
+    }
     set.add(res);
     this.send(res, { type: "roster", roster: this.roster(runtime) });
     if (runtime.record.endedAtMs !== null) this.send(res, { type: "ended" });
@@ -337,6 +350,20 @@ export class Collector {
       set.delete(res);
       this.broadcastRoster(runtime);
     });
+  }
+
+  private assertPlausibleTiming(record: SessionRecord, request: DeclareTrackRequest): void {
+    const invalid = (field: string): HttpError => new HttpError(400, "invalid_field", { field });
+    const startServerMs = request.startClientMs + request.offsetMs;
+    if (startServerMs < record.createdAtMs - TIMING_WINDOW_MS || startServerMs > nowMs() + TIMING_WINDOW_MS) throw invalid("startClientMs");
+    if (request.clockSamples.some((sample) => Math.abs(sample.offsetMs - request.offsetMs) > TIMING_WINDOW_MS)) throw invalid("clockSamples");
+  }
+
+  private async assertDiskRoom(): Promise<void> {
+    if (this.config.storageDriver !== "local") return;
+    const free = await freeBytes(this.config.localDir).catch(() => null);
+    const required = INGEST_MIN_FREE_BYTES;
+    if (free !== null && free < required) throw new HttpError(507, "disk_low", { freeBytes: free, requiredBytes: required });
   }
 
   // ---- internals ---------------------------------------------------------

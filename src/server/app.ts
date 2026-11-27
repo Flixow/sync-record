@@ -37,7 +37,10 @@ const CSP = [
   "object-src 'none'",
   "base-uri 'none'",
   "frame-ancestors 'none'",
+  "form-action 'self'",
 ].join("; ");
+
+const SMALL_BODY_BYTES = 4096;
 
 export interface App {
   server: Server;
@@ -90,8 +93,8 @@ export function createApp(config: Config, storage: Storage, asr?: AsrEngine): Ap
     return Buffer.concat(chunks);
   }
 
-  async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
-    const raw = await readBody(req, 1024 * 1024);
+  async function readJson(req: IncomingMessage, limit = 1024 * 1024): Promise<Record<string, unknown>> {
+    const raw = await readBody(req, limit);
     if (raw.length === 0) return {};
     try {
       return v.asObject(JSON.parse(raw.toString("utf8")));
@@ -140,8 +143,8 @@ export function createApp(config: Config, storage: Storage, asr?: AsrEngine): Ap
       return;
     }
     if (method === "POST" && parts[0] === "sessions" && parts.length === 1) {
-      const body = await readJson(req);
-      const name = v.str(body.name, "name", 60);
+      const body = await readJson(req, SMALL_BODY_BYTES);
+      const name = v.displayName(body.name, "name", 60);
       const createKey = body.createKey === undefined ? undefined : v.str(body.createKey, "createKey", 200);
       const created = await collector.createSession(name, createKey, userAgent(req));
       telemetry.capture("session_created", {});
@@ -154,8 +157,8 @@ export function createApp(config: Config, storage: Storage, asr?: AsrEngine): Ap
 
     if (method === "POST" && rest.length === 1 && rest[0] === "join") {
       claims(req, url, "invite", sid);
-      const body = await readJson(req);
-      const joined = await collector.join(sid, v.str(body.name, "name", 60), userAgent(req));
+      const body = await readJson(req, SMALL_BODY_BYTES);
+      const joined = await collector.join(sid, v.displayName(body.name, "name", 60), userAgent(req));
       telemetry.capture("session_joined", { participants: (await collector.view(sid, joined.participantId)).roster.length });
       json(res, 201, joined);
       return;
@@ -317,6 +320,7 @@ export function createApp(config: Config, storage: Storage, asr?: AsrEngine): Ap
     res.setHeader("referrer-policy", "no-referrer");
     res.setHeader("content-security-policy", CSP);
     res.setHeader("permissions-policy", "microphone=(self), camera=(self), display-capture=(self)");
+    res.setHeader("x-robots-tag", "noindex, nofollow");
     if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
       await api(req, res, url);
       return;

@@ -1,6 +1,7 @@
 // Pure helpers for the storage warning. Bitrates mirror the recorder settings.
 
 import type { TrackKind } from "../../shared/protocol.js";
+import { formatNumber } from "./number.js";
 
 export const BITRATE_BPS: Record<TrackKind, number> = {
   audio: 128_000,
@@ -46,7 +47,7 @@ export function formatBytes(bytes: number): string {
     value /= 1024;
     unit += 1;
   }
-  return `${value >= 100 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+  return `${formatNumber(value, value >= 100 || unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
 export function formatDuration(totalSeconds: number): string {

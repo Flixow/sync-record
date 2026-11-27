@@ -1,14 +1,17 @@
 import type { Range } from "../../shared/edl.js";
+import { DEFAULT_DRIFT_OPTIONS } from "../../shared/drift.js";
 import type { JobRecord, ProjectFile } from "../../shared/project.js";
 import { ApiError, SessionApi } from "../lib/api.js";
 import { h, setChildren } from "../lib/dom.js";
 import type { ProjectApi, ProjectState } from "../lib/project-api.js";
 import { formatBytes, formatDuration } from "../lib/storage-math.js";
+import { formatNumber } from "../lib/number.js";
 import { t } from "../i18n/index.js";
 import { clipsPanel, type ClipsPanel } from "./clips-panel.js";
 import { exportPanel, type ExportPanel } from "./export-panel.js";
 import { claimLinkPanel } from "./access.js";
-import { banner, card, page } from "./layout.js";
+import { failureBanner, progressBar, stageLabel } from "./job-status.js";
+import { banner, card, page, scrollable } from "./layout.js";
 import { layoutPanel, type LayoutPanel } from "./layout-panel.js";
 import { publishPanel, type PublishPanel } from "./publish-panel.js";
 import { stage, type Stage } from "./stage.js";
@@ -27,6 +30,24 @@ function errorText(error: unknown): string {
 }
 
 const hasPictures = (project: ProjectFile): boolean => project.sources.some((source) => source.hasVideo && (source.kind === "camera" || source.kind === "screen"));
+
+type Source = ProjectFile["sources"][number];
+
+const trackName = (source: Source): string => `${source.participantName} · ${t(`rec.track.${source.kind}`)}${source.segment > 1 ? ` #${source.segment}` : ""}`;
+const percentOf = (job: JobRecord): number => Math.round(job.progress * 100);
+const progressText = (job: JobRecord): string => `${percentOf(job)}% ${stageLabel(job.stage)}`.trim();
+
+function driftWarnings(project: ProjectFile): HTMLElement[] {
+  return project.sources
+    .filter(
+      (source) =>
+        !source.driftApplied && Math.abs(source.driftPpm) > DEFAULT_DRIFT_OPTIONS.maxPpm && source.timelineDurationMs >= DEFAULT_DRIFT_OPTIONS.minSpanSec * 1000,
+    )
+    .map((source) => {
+      const seconds = formatNumber((Math.abs(source.driftPpm) * source.timelineDurationMs) / 1e9, 1);
+      return banner("warn", t(source.driftPpm < 0 ? "pj.drift.shorter" : "pj.drift.longer", { track: trackName(source), seconds }), "pj-drift-warning");
+    });
+}
 
 /**
  * What the stage (player, timeline, cut list) is built for: the audio of the project and its length. The prepared media
@@ -154,10 +175,10 @@ export function projectView(api: ProjectApi): { el: HTMLElement; dispose: () => 
       trControls,
       h("div", { class: "row" }, h("span", { class: `pill pill-${transcript.status === "done" ? "ok" : transcript.status === "failed" ? "failed" : "pending"}`, "data-testid": "pj-tr-status", "data-status": transcript.status }, t(`pj.tr.status.${transcript.status}`))),
       job
-        ? h("div", { class: "stack" }, h("div", { class: "bar", role: "progressbar", "aria-valuenow": String(Math.round(job.progress * 100)) }, h("div", { class: "bar-fill", style: `width:${Math.round(job.progress * 100)}%` })), h("p", { class: "hint", "data-testid": "pj-tr-progress" }, `${Math.round(job.progress * 100)}% ${job.stage ?? ""}`), h("button", { type: "button", class: "btn btn-small", "data-testid": "pj-tr-cancel", onclick: () => void run(() => api.cancelJob(job.id)) }, t("pj.cancel")))
+        ? h("div", { class: "stack" }, progressBar(percentOf(job), t("pj.tr.title"), job.stage), h("p", { class: "hint", "data-testid": "pj-tr-progress" }, progressText(job)), h("button", { type: "button", class: "btn btn-small", "data-testid": "pj-tr-cancel", onclick: () => void run(() => api.cancelJob(job.id)) }, t("pj.cancel")))
         : h("div", { class: "row" }, lang, h("button", { type: "button", class: "btn btn-primary", "data-testid": "pj-tr-start", disabled: !ready || lowDisk, onclick: () => void run(() => api.startJob("transcribe", { lang: trLang })) }, transcript.status === "done" ? t("pj.tr.again") : t("pj.tr.start"))),
       ready ? null : h("p", { class: "hint" }, t("pj.tr.needMedia")),
-      transcript.error ? banner("error", transcript.error, "pj-tr-error") : null,
+      transcript.error ? failureBanner("pj.job.transcribe", transcript.error, "pj-tr-error") : null,
       h("p", { class: "hint" }, t("pj.tr.hint")),
     );
     const key = stg && transcript.status === "done" ? `${stgKey}|${transcript.atMs}` : "";
@@ -290,21 +311,24 @@ export function projectView(api: ProjectApi): { el: HTMLElement; dispose: () => 
       h(
         "tr",
         { "data-testid": `pj-source-${source.id}` },
-        h("td", {}, `${source.participantName} · ${t(`rec.track.${source.kind}`)}${source.segment > 1 ? ` #${source.segment}` : ""}`),
-        h("td", { class: "num" }, `${(source.offsetMs / 1000).toFixed(2)} s`),
+        h("td", {}, trackName(source)),
+        h("td", { class: "num" }, `${formatNumber(source.offsetMs / 1000, 2)} s`),
         h("td", { class: "num" }, formatDuration(source.timelineDurationMs / 1000)),
-        h("td", { class: "num", title: source.driftNote ?? "" }, `${source.driftPpm >= 0 ? "+" : ""}${source.driftPpm.toFixed(0)} ppm ${source.driftApplied ? t("pj.drift.corrected") : t("pj.drift.kept")}`),
+        h("td", { class: "num" }, `${source.driftPpm >= 0 ? "+" : ""}${formatNumber(source.driftPpm, 0)} ppm ${source.driftApplied ? t("pj.drift.corrected") : t("pj.drift.kept")}`),
       ),
     );
     setChildren(
       info,
       h("p", { class: "hint" }, t("pj.lead")),
-      h(
-        "table",
-        { class: "data-table", "data-testid": "pj-sources" },
-        h("thead", {}, h("tr", {}, h("th", {}, t("pj.col.track")), h("th", {}, t("pj.col.start")), h("th", {}, t("pj.col.length")), h("th", {}, t("pj.col.drift")))),
-        h("tbody", {}, ...rows),
+      scrollable(
+        h(
+          "table",
+          { class: "data-table", "data-testid": "pj-sources" },
+          h("thead", {}, h("tr", {}, h("th", {}, t("pj.col.track")), h("th", {}, t("pj.col.start")), h("th", {}, t("pj.col.length")), h("th", {}, t("pj.col.drift")))),
+          h("tbody", {}, ...rows),
+        ),
       ),
+      ...driftWarnings(project),
       h("p", { class: "hint" }, t("pj.duration", { time: formatDuration(project.durationMs / 1000) })),
     );
     const prepared = h(
@@ -312,9 +336,9 @@ export function projectView(api: ProjectApi): { el: HTMLElement; dispose: () => 
       { class: "stack" },
       h("div", { class: "row" }, h("span", {}, t("pj.media")), h("span", { class: `pill pill-${conform.status === "done" ? "ok" : conform.status === "failed" ? "failed" : "pending"}`, "data-testid": "pj-conform-status", "data-status": conform.status }, t(`pj.status.${conform.status}`))),
       job
-        ? h("div", { class: "stack" }, h("div", { class: "bar", role: "progressbar", "aria-valuenow": String(Math.round(job.progress * 100)) }, h("div", { class: "bar-fill", style: `width:${Math.round(job.progress * 100)}%` })), h("p", { class: "hint", "data-testid": "pj-progress" }, `${Math.round(job.progress * 100)}% ${job.stage ?? ""}`), h("button", { type: "button", class: "btn btn-small", "data-testid": "pj-cancel", onclick: () => void run(() => api.cancelJob(job.id)) }, t("pj.cancel")))
+        ? h("div", { class: "stack" }, progressBar(percentOf(job), t("pj.media"), job.stage), h("p", { class: "hint", "data-testid": "pj-progress" }, progressText(job)), h("button", { type: "button", class: "btn btn-small", "data-testid": "pj-cancel", onclick: () => void run(() => api.cancelJob(job.id)) }, t("pj.cancel")))
         : h("button", { type: "button", class: "btn btn-primary", "data-testid": "pj-prepare", disabled: lowDisk, onclick: () => void run(() => api.startJob("conform")) }, conform.status === "done" ? t("pj.prepare.again") : t("pj.prepare")),
-      conform.error ? banner("error", conform.error, "pj-conform-error") : null,
+      conform.error ? failureBanner("pj.job.conform", conform.error, "pj-conform-error") : null,
       lowDisk ? banner("warn", t("pj.err.disk_low"), "pj-disk-low") : null,
       state.disk.freeBytes !== null ? h("p", { class: "hint", "data-testid": "pj-disk" }, t("pj.disk", { free: formatBytes(state.disk.freeBytes), min: formatBytes(state.disk.minFreeBytes) })) : null,
       conform.status === "done" || project.sources.some((source) => source.audio || source.video)
@@ -336,7 +360,8 @@ export function projectView(api: ProjectApi): { el: HTMLElement; dispose: () => 
     syncPublishing(state);
   }
 
-  const el = page(card(t("pj.title"), claimLinkPanel(new SessionApi(api.sid, api.token)), notice, body));
+  const access = h("section", { class: "step" }, h("h3", {}, t("pj.access.title")), claimLinkPanel(new SessionApi(api.sid, api.token)));
+  const el = page(h("h1", { class: "page-title" }, t("room.session", { id: api.sid.slice(0, 8) })), card(t("pj.title"), notice, body, access));
   void refresh();
   return {
     el,

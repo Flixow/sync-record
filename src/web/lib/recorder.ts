@@ -24,7 +24,7 @@ export interface RecorderInit {
   clockSamples: RecordingMeta["declareSamples"];
   settings: RecordingMeta["settings"];
   onEnded: (recorder: TrackRecorder, reason: EndReason) => void;
-  onError: (recorder: TrackRecorder, error: unknown) => void;
+  onError: (recorder: TrackRecorder, error: unknown, cause: "storage" | "encoder") => void;
 }
 
 /**
@@ -94,7 +94,7 @@ export class TrackRecorder {
     recorder.ondataavailable = (event) => {
       if (event.data.size === 0) return;
       this.recording.append(event.data).catch((error: unknown) => {
-        this.init.onError(this, error);
+        this.init.onError(this, error, "storage");
         void this.stop("error");
       });
     };
@@ -108,6 +108,10 @@ export class TrackRecorder {
     meta.startCallClientMs = clientNowMs();
     recorder.start(TIMESLICE_MS);
     await started;
+    recorder.onerror = (event) => {
+      this.init.onError(this, (event as ErrorEvent).error ?? new Error("recorder error"), "encoder");
+      void this.stop("error");
+    };
     await this.recording.saveMeta();
   }
 
@@ -122,6 +126,7 @@ export class TrackRecorder {
   }
 
   private async finish(reason: EndReason): Promise<void> {
+    const stopRequestedMs = clientNowMs();
     const recorder = this.recorder;
     if (recorder && recorder.state !== "inactive") {
       await new Promise<void>((resolve) => {
@@ -133,7 +138,7 @@ export class TrackRecorder {
     await this.recording.flush().catch(() => undefined);
     const { meta } = this.recording;
     meta.state = "stopped";
-    meta.endClientMs = clientNowMs();
+    meta.endClientMs = stopRequestedMs;
     meta.endReason = reason;
     await this.recording.saveMeta();
     this.init.onEnded(this, reason);
