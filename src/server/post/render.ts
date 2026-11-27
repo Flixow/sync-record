@@ -1,5 +1,4 @@
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import path from "node:path";
 import type { TranscriptFile } from "../../shared/transcript.js";
 import { captionFilter, captionSidecars, captionStyleById, layoutCaptions, toAss } from "../../shared/captions.js";
@@ -13,17 +12,14 @@ import type { Config } from "../config.js";
 import { TRANSCRIPT_FILE } from "./transcribe.js";
 import { readEdl } from "./edl-store.js";
 import { cleanInputsGraph, DEFAULT_CLEAN, prepareClean, type CleanOptions, type CleanTrack } from "./audio-clean.js";
-import { layoutSources, resolveScenes } from "./layout-plan.js";
-import { layoutVideoGraph } from "./render-layout.js";
+import { cardsOf, layoutSources, resolveScenes } from "./layout-plan.js";
+import { FONTS_DIR, layoutVideoGraph } from "./render-layout.js";
 import { readScenes } from "./scenes-store.js";
 import { addExport } from "./exports.js";
 import { ffmpeg, runTool, type ToolContext } from "./exec.js";
 import type { JobContext } from "./jobs.js";
 import type { ProjectStore } from "./projects.js";
 import { FADE_MS } from "./render-audio.js";
-
-/** The bundled caption fonts; `assets/` sits next to `src/` and `dist/` in a checkout and in the image. */
-export const FONTS_DIR = fileURLToPath(new URL("../../../assets/fonts", import.meta.url));
 
 export interface RenderDeps {
   config: Config;
@@ -239,7 +235,7 @@ export function renderHandler(deps: RenderDeps) {
       const saved = await readScenes(dir);
       const aspect = presetAspect(preset);
       const background: Background = saved.rev === 0 && aspect !== "16:9" ? { kind: "blur", sigma: 40 } : saved.background;
-      const video = layoutVideoGraph({ inputs: videoInputs, canvas: { width: preset.width, height: preset.height }, fps: preset.fps, scenes, kept, totalMs: project.durationMs, background });
+      const video = layoutVideoGraph({ inputs: videoInputs, cards: cardsOf(project).filter((card) => used.has(card.id)).map((card) => ({ id: card.id, name: card.name })), canvas: { width: preset.width, height: preset.height }, fps: preset.fps, scenes, kept, totalMs: project.durationMs, background });
       graph += `;\n${video.graph}`;
       videoLabel = video.label;
       const captionsParam = job.params.captions;

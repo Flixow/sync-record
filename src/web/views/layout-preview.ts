@@ -3,6 +3,7 @@ import {
   canvasFor,
   CANVASES,
   computeTiles,
+  initialsOf,
   tileCss,
   type Aspect,
   type Background,
@@ -30,6 +31,8 @@ export interface PreviewSource extends LayoutSource {
   name: string;
   /** URL of the 480p proxy on the project timeline. */
   video: string | null;
+  /** Set for a participant without a camera: the name the card shows. The card is drawn here, there is no video. */
+  card?: string;
 }
 
 export interface PreviewState {
@@ -66,6 +69,16 @@ declare global {
 
 const noop = (): void => undefined;
 
+/** The name card of a participant without a camera: the initials in a round avatar and the name under it (the renderer draws the same). */
+function makeCard(name: string): HTMLElement {
+  return h(
+    "div",
+    { class: "lay-tile lay-card", "data-testid": "pj-lay-card" },
+    h("span", { class: "lay-card-avatar", "aria-hidden": "true" }, initialsOf(name)),
+    h("span", { class: "lay-card-name" }, name),
+  );
+}
+
 function makeVideo(src: string, testId: string, className: string): HTMLVideoElement {
   const video = h("video", { class: className, preload: "auto", playsinline: true, tabindex: -1, "aria-hidden": "true", "data-testid": testId, src });
   video.muted = true;
@@ -86,7 +99,9 @@ export function layoutPreview(stage: Stage, sources: PreviewSource[], initial: P
   const backdropLayer = h("div", { class: "lay-backdrop" });
   container.append(backdropLayer);
   for (const source of sources) {
-    const tile = source.video
+    const tile = source.card !== undefined
+      ? makeCard(source.card)
+      : source.video
       ? makeVideo(source.video, "pj-lay-video", "lay-tile")
       : h("div", { class: "lay-tile lay-empty", "data-testid": "pj-lay-empty" }, source.name);
     tile.dataset.source = source.id;

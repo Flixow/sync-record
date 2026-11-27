@@ -1,14 +1,45 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { LayoutSource } from "../../shared/layout.js";
-import type { ProjectFile, ProjectSource } from "../../shared/project.js";
+import { CARD_SIZE, cardSourceId, type LayoutSource } from "../../shared/layout.js";
+import { LEVEL_FLOOR_DB, type ProjectFile, type ProjectSource } from "../../shared/project.js";
 import { applyOverrides, planScenes, type ActivityTrack, type Scene, type ScenePlan } from "../../shared/scenes.js";
 
-/** Video sources the layouts can show, with the picture size of the original recording. */
+const isPicture = (source: ProjectSource): boolean => source.hasVideo && Boolean(source.width) && Boolean(source.height) && (source.kind === "camera" || source.kind === "screen");
+
+/** The pictures of the recording: cameras and screens that have video. */
+const pictures = (project: ProjectFile): ProjectSource[] => project.sources.filter(isPicture);
+
+/** A participant who recorded a microphone and no camera, shown as a name card. */
+export interface Card {
+  /** The source id the scenes use (`cardSourceId`). */
+  id: string;
+  participantId: string;
+  name: string;
+  /** The participant's microphone tracks (one per segment). */
+  microphones: ProjectSource[];
+}
+
+/**
+ * The participants with a microphone and without a camera picture, in the order their tracks appear. Empty when the project has no
+ * picture at all: an audio-only recording has no video to lay out, so it gets no cards either.
+ */
+export function cardsOf(project: ProjectFile): Card[] {
+  if (pictures(project).length === 0) return [];
+  const cards: Card[] = [];
+  for (const participantId of new Set(project.sources.map((source) => source.participantId))) {
+    const own = project.sources.filter((source) => source.participantId === participantId);
+    if (own.some((source) => isPicture(source) && source.kind === "camera")) continue;
+    const microphones = own.filter((source) => source.kind === "audio" && source.audio !== null);
+    const first = microphones[0];
+    if (first) cards.push({ id: cardSourceId(participantId), participantId, name: first.participantName, microphones });
+  }
+  return cards;
+}
+
+/** Sources the layouts can show: the video sources with the picture size of the original recording, then a name card for each microphone-only participant. */
 export function layoutSources(project: ProjectFile): LayoutSource[] {
-  return project.sources
-    .filter((source) => source.hasVideo && source.width && source.height && (source.kind === "camera" || source.kind === "screen"))
-    .map((source) => ({ id: source.id, kind: source.kind === "screen" ? "screen" : "camera", width: source.width as number, height: source.height as number }));
+  const shown = pictures(project).map((source): LayoutSource => ({ id: source.id, kind: source.kind === "screen" ? "screen" : "camera", width: source.width as number, height: source.height as number }));
+  return [...shown, ...cardsOf(project).map((card): LayoutSource => ({ id: card.id, kind: "card", width: CARD_SIZE.width, height: CARD_SIZE.height }))];
 }
 
 /** Milliseconds two sources are both recording on the project timeline. */
@@ -42,19 +73,39 @@ export function microphoneOf(project: ProjectFile, picture: ProjectSource): Proj
   return best;
 }
 
-/** Activity of every picture source: a camera is "active" while its owner's microphone has speech. */
+/** The level track of a file of the project directory. */
+async function levelsOf(dir: string, file: string): Promise<Int8Array> {
+  const buffer = await readFile(path.join(dir, file));
+  return new Int8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+}
+
+/** Per 20 ms frame the loudest of several level tracks (a participant who recorded in several segments is one voice). */
+function loudest(tracks: Int8Array[]): Int8Array {
+  const first = tracks[0];
+  if (tracks.length === 1 && first) return first;
+  const out = new Int8Array(Math.max(0, ...tracks.map((track) => track.length))).fill(LEVEL_FLOOR_DB);
+  for (const track of tracks) for (let frame = 0; frame < track.length; frame++) if ((track[frame] as number) > (out[frame] as number)) out[frame] = track[frame] as number;
+  return out;
+}
+
+/**
+ * Activity of every source the scenes can feature: a camera is "active" while its owner's microphone has speech, a name
+ * card while the microphone of its participant has speech, a screen is a picture only.
+ */
 export async function activityTracks(project: ProjectFile, dir: string): Promise<ActivityTrack[]> {
   const out: ActivityTrack[] = [];
-  for (const source of layoutSources(project)) {
-    const owner = project.sources.find((item) => item.id === source.id) as ProjectSource;
+  for (const source of pictures(project)) {
     if (source.kind === "screen") {
-      out.push({ id: source.id, levels: new Int8Array(0), kind: "screen", range: { s: owner.offsetMs, e: owner.offsetMs + owner.timelineDurationMs } });
+      out.push({ id: source.id, levels: new Int8Array(0), kind: "screen", range: { s: source.offsetMs, e: source.offsetMs + source.timelineDurationMs } });
       continue;
     }
-    const mic = microphoneOf(project, owner);
+    const mic = microphoneOf(project, source);
     if (!mic?.audio) continue;
-    const buffer = await readFile(path.join(dir, mic.audio.levels));
-    out.push({ id: source.id, levels: new Int8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength), kind: "camera" });
+    out.push({ id: source.id, levels: await levelsOf(dir, mic.audio.levels), kind: "camera" });
+  }
+  for (const card of cardsOf(project)) {
+    const levels = await Promise.all(card.microphones.map((mic) => levelsOf(dir, mic.audio?.levels ?? "")));
+    out.push({ id: card.id, levels: loudest(levels), kind: "camera" });
   }
   return out;
 }

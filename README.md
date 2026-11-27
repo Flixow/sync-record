@@ -223,7 +223,10 @@ the picture. On 9:16 every picture stays inside the safe area, clear of the plat
 speaker** switching follows who is talking on their own microphone (a voice that only leaks into someone else's
 microphone does not count), with a minimum time on screen, hysteresis, a short hold after speech ends, and a rhythm
 (calm, balanced, lively). Manual scene edits are layered over the automatic ones, are saved separately (`scenes.json`) and
-can be undone or cleared.
+can be undone or cleared. A participant who recorded a microphone and no camera (a phone call, a guest with the camera
+off) is a speaker like any other: their voice drives the switching and the scene list offers them as a source. Their
+picture is a **name card** (a round avatar with the initials, the name under it) that the preview draws and the render
+generates at the size of its tile, so it needs no video; their microphone is mixed into the program like every track.
 
 On the project page the **Layout** section drives a live preview above the player. It draws the layout engine's own
 geometry (the same percentages the render derives its crops from) with the 480p proxies and keeps every picture in step

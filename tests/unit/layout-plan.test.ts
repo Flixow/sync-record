@@ -2,9 +2,12 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { activityTracks, microphoneOf } from "../../src/server/post/layout-plan.js";
+import { activityTracks, cardsOf, layoutSources, microphoneOf } from "../../src/server/post/layout-plan.js";
 import { parseScenes } from "../../src/server/post/scenes-store.js";
+import { cardSourceId } from "../../src/shared/layout.js";
 import type { ProjectFile, ProjectSource } from "../../src/shared/project.js";
+import { planSegments } from "../../src/shared/scene-plan.js";
+import { planScenes, DEFAULT_SCENE_PARAMS } from "../../src/shared/scenes.js";
 
 function source(patch: Partial<ProjectSource> & Pick<ProjectSource, "id" | "kind">): ProjectSource {
   const hasAudio = patch.kind === "audio";
@@ -82,7 +85,62 @@ describe("activityTracks", () => {
   });
 });
 
+describe("a participant with a microphone and no camera", () => {
+  // Daniel has a camera and a microphone, Michal only a microphone (recorded in two segments).
+  const daniel = { participantId: "p1", participantName: "Daniel" };
+  const michal = { participantId: "p2", participantName: "Michał Rowiński" };
+  const sources = [
+    source({ id: "d-mic", kind: "audio", ...daniel }),
+    source({ id: "d-cam", kind: "camera", ...daniel }),
+    source({ id: "m-mic1", kind: "audio", ...michal }),
+    source({ id: "m-mic2", kind: "audio", segment: 2, offsetMs: 30_000, ...michal }),
+  ];
+
+  it("is a name card source of its own, after the pictures, and Daniel with a camera gets none", () => {
+    const project = projectOf(sources);
+    expect(cardsOf(project).map((card) => [card.id, card.name, card.microphones.map((mic) => mic.id)])).toEqual([[cardSourceId("p2"), "Michał Rowiński", ["m-mic1", "m-mic2"]]]);
+    expect(layoutSources(project)).toEqual([
+      { id: "d-cam", kind: "camera", width: 1280, height: 720 },
+      { id: cardSourceId("p2"), kind: "card", width: 1280, height: 720 },
+    ]);
+  });
+
+  it("is also a card when the participant only shared a screen, and never in a recording without a picture", () => {
+    const shared = projectOf([...sources.slice(2), source({ id: "m-scr", kind: "screen", ...michal }), source({ id: "d-cam", kind: "camera", ...daniel })]);
+    expect(cardsOf(shared).map((card) => card.participantId)).toEqual(["p2"]);
+    expect(layoutSources(projectOf(sources.filter((item) => item.kind === "audio")))).toEqual([]);
+  });
+
+  it("is active while its microphone speaks (the louder of its segments), so the scenes switch to its card", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "syncrecord-layout-card-"));
+    await mkdir(path.join(dir, "levels"));
+    const frames = 3000; // 60 s
+    const level = (from: number, to: number): Buffer => Buffer.from(Int8Array.from({ length: frames }, (_, frame) => (frame >= from && frame < to ? -28 - (frame % 4) : -80)));
+    await writeFile(path.join(dir, "levels", "d-mic.bin"), level(0, 1500));
+    // Michal's two segments cover 30 s to 45 s and 45 s to 60 s of the timeline; each file is timeline aligned
+    await writeFile(path.join(dir, "levels", "m-mic1.bin"), level(1500, 2250));
+    await writeFile(path.join(dir, "levels", "m-mic2.bin"), level(2250, 3000));
+    const project = { ...projectOf(sources), durationMs: 60_000 } as ProjectFile;
+    const tracks = await activityTracks(project, dir);
+    expect(tracks.map((track) => [track.id, track.kind])).toEqual([["d-cam", "camera"], [cardSourceId("p2"), "camera"]]);
+    const scenes = planScenes(tracks, 60_000, DEFAULT_SCENE_PARAMS);
+    expect(scenes.map((scene) => scene.sources[0])).toEqual(["d-cam", cardSourceId("p2")]);
+    expect(scenes[1]?.s).toBeGreaterThanOrEqual(29_000);
+    expect(scenes[1]?.s).toBeLessThanOrEqual(30_000);
+    expect(scenes.every((scene) => scene.sources.length === 2)).toBe(true);
+    // the scene suggestions count his speech too: without his track half the recording would look silent
+    const [segment] = planSegments(scenes, tracks, [], { maxSegments: 1 });
+    expect(segment?.signals.speechPct).toBe(100);
+    expect(segment?.allowed).toContain("side-by-side");
+  });
+});
+
 describe("parseScenes: the screen switch", () => {
+  it("accepts a name card as the source of an override", () => {
+    const plan = { params: { minDwellMs: 2500, hysteresisDb: 4, hangoverMs: 600, rhythm: "balanced", layout: "solo", fallback: "keep" }, overrides: [{ s: 0, e: 5000, sources: [cardSourceId("0123456789abcdef0123"), "p1-cam-0001"] }] };
+    expect(parseScenes({ plan, aspect: "16:9" }).plan.overrides[0]?.sources?.[0]).toBe("card-0123456789abcdef0123");
+  });
+
   const body = (params: Record<string, unknown>) => ({ plan: { params: { minDwellMs: 2500, hysteresisDb: 4, hangoverMs: 600, rhythm: "balanced", layout: "solo", fallback: "keep", ...params }, overrides: [] }, aspect: "16:9" });
 
   it('keeps "off", leaves it out when absent and refuses anything else', () => {
