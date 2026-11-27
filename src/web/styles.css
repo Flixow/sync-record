@@ -243,6 +243,22 @@ input[type="text"]:focus-visible, input[type="password"]:focus-visible, input[ty
 .roster-row .muted { grid-column: 2; }
 .roster-name { font-weight: 600; }
 .tag { margin-left: 0.4rem; font-size: 0.7rem; font-weight: 600; background: var(--brand-soft); color: var(--brand-text); padding: 0.05rem 0.45rem; border-radius: 99px; }
+/* Conversation stage: a grid of tiles, screens span the full row. */
+.call-grid { display: grid; gap: 0.6rem; grid-template-columns: repeat(var(--call-cols, 1), minmax(0, 1fr)); margin: 0.75rem 0; }
+.call-tile { position: relative; margin: 0; aspect-ratio: 16 / 9; border-radius: var(--r-base); overflow: hidden; background: #0f172a; color: #fff; border: 2px solid transparent; transition: border-color var(--dur-fast) var(--ease-out); }
+.call-tile[data-speaking="true"] { border-color: var(--success); }
+.call-tile-screen { grid-column: 1 / -1; aspect-ratio: 16 / 9; }
+.call-tile video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #0f172a; }
+.call-tile-screen video { object-fit: contain; }
+.call-tile[data-video="false"] video { visibility: hidden; }
+.call-avatar { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.25rem; font-size: 2rem; font-weight: 650; }
+.call-avatar small { font-size: 0.78rem; font-weight: 500; opacity: 0.85; }
+.call-tile[data-video="true"] .call-avatar { display: none; }
+.call-caption { position: absolute; left: 0; right: 0; bottom: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; padding: 0.35rem 0.6rem; background: linear-gradient(transparent, rgb(2 6 23 / 80%)); font-size: 0.85rem; font-weight: 600; }
+.call-caption .tag { background: rgb(255 255 255 / 85%); }
+.call-caption .call-tag-muted { background: var(--danger-soft); color: var(--danger); }
+@media (max-width: 48rem) { .call-grid { grid-template-columns: repeat(min(var(--call-cols, 1), 2), minmax(0, 1fr)); } }
+
 .dot { width: 9px; height: 9px; border-radius: 50%; background: #94a3b8; display: inline-block; }
 .dot-on { background: var(--success); }
 .dot-rec { background: var(--rec); }

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { readFileSync } from "node:fs";
+import { DEFAULT_CALL_TOKEN_TTL_SECONDS, livekitOrigins, type LivekitSettings } from "./livekit.js";
 import { telemetryOrigin, type TelemetrySettings } from "./telemetry.js";
 import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_ANTHROPIC_URL, DEFAULT_LLM_TIMEOUT_MS, DEFAULT_SHORTS_TIMEOUT_MS, LLM_PROVIDER_NAMES, llmTransport, type LlmProviderName, type LlmSettings } from "./post/llm.js";
 
@@ -30,6 +31,8 @@ export interface Config {
   version: string;
   /** Optional telemetry; null (off) unless POSTHOG_KEY and POSTHOG_HOST are both set. */
   telemetry: TelemetrySettings | null;
+  /** Optional in-product call on LiveKit; null (off) unless LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET are all set. */
+  call: LivekitSettings | null;
   post: PostConfig;
 }
 
@@ -150,6 +153,20 @@ function loadTelemetry(env: Env): TelemetrySettings | null {
   return { key, host: origin };
 }
 
+/** All three variables or none: a half-configured call is a configuration error, not a silent off. */
+function loadCall(env: Env): LivekitSettings | null {
+  const url = text(env, "LIVEKIT_URL");
+  const apiKey = text(env, "LIVEKIT_API_KEY");
+  const apiSecret = text(env, "LIVEKIT_API_SECRET");
+  if (url === undefined && apiKey === undefined && apiSecret === undefined) return null;
+  if (url === undefined || apiKey === undefined || apiSecret === undefined) {
+    throw new Error("LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET must be set together");
+  }
+  if (livekitOrigins(url) === null) throw new Error("LIVEKIT_URL must be a wss:// URL without a path (ws:// only for localhost)");
+  if (apiSecret.length < 32) throw new Error("LIVEKIT_API_SECRET must be at least 32 characters");
+  return { url: url.replace(/\/$/, ""), apiKey, apiSecret, tokenTtlSeconds: integer(env, "LIVEKIT_TOKEN_TTL_SECONDS", DEFAULT_CALL_TOKEN_TTL_SECONDS, 60, 3600) };
+}
+
 export function loadConfig(env: Env = process.env): Config {
   const tokenSecret = text(env, "TOKEN_SIGNING_SECRET");
   if (!tokenSecret || tokenSecret.length < 16) {
@@ -201,6 +218,7 @@ export function loadConfig(env: Env = process.env): Config {
     webDir: path.resolve(text(env, "WEB_DIR") ?? "./dist/web"),
     version: text(env, "APP_VERSION") ?? "0.1.0",
     telemetry: loadTelemetry(env),
+    call: loadCall(env),
     post: {
       dir: postDir,
       concurrency: integer(env, "POST_CONCURRENCY", 1, 1, 8),

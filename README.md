@@ -38,6 +38,8 @@ directory or any S3-compatible bucket you choose.
   by transcript, silence removal, active-speaker and screen-share layouts (16:9, 9:16, 1:1), captions, loudness-normalised
   YouTube and audio exports, 20-90 s vertical clips and publish drafts (chapters, titles, thumbnails). Nothing is
   published anywhere by SyncRecord.
+- Optional conversation in the page on LiveKit (join, mute, camera, leave, a grid of participants), **off by default**
+  (`LIVEKIT_URL` and keys, see [Conversation](#conversation-optional)). Recording stays local and independent of it.
 - Optional extras, both **off until configured**: a language-model provider (`LLM_URL`, or `LLM_PROVIDER=anthropic` with a key; the
   clips cut by the model, chapter titles, title drafts and a model-driven scene plan, see
   [Optional language model](#optional-language-model); the transcript text leaves the machine when it is on) and server-side
@@ -120,6 +122,8 @@ Everything is read from the environment (see `.env.example`). Nothing is hardcod
 | `LLM_MODEL` | `default`; `claude-opus-5-5` for `anthropic` | Model name sent to the endpoint. Required for `omp-gateway` (`provider/model-id`). The Opus id is from Anthropic's release notes and not yet confirmed by a request; set this if it is wrong. |
 | `LLM_API_KEY`, `LLM_API_KEY_FILE` | empty | Key for the endpoint (`Authorization: Bearer`; `x-api-key` for `anthropic`), from the environment or from a file (use the file with Docker/Kubernetes secrets); set at most one. Refused over plain `http://` unless the host is this machine, Docker's `host.docker.internal` or a Tailscale address. Never logged, never sent to the browser, never written to a job file. |
 | `ANTHROPIC_API_KEY` | empty | The key of `LLM_PROVIDER=anthropic` when `LLM_API_KEY` and `LLM_API_KEY_FILE` are not set. Ignored by every other provider. Without a key the model stays off and no request is ever made. |
+| `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | empty | Optional in-page conversation on a LiveKit server you run (or LiveKit Cloud). All three or none; off when none is set. `LIVEKIT_URL` is the public `wss://` signalling URL without a path (`ws://` only for localhost); the secret must be at least 32 characters. See [Conversation](#conversation-optional). |
+| `LIVEKIT_TOKEN_TTL_SECONDS` | `600` | Lifetime of a call token, 60 to 3600. A token is needed only to connect; the LiveKit server refreshes it for a connected client. |
 | `POSTHOG_KEY`, `POSTHOG_HOST` | empty | Optional telemetry to a PostHog instance you operate. Off unless both are set; see [Telemetry](#telemetry). |
 | `LLM_TIMEOUT_MS` | `60000` | Per-request timeout, 1000 to 600000. A timeout counts as a failure: the built-in rules answer instead. |
 | `SHORTS_TIMEOUT_MS` | `120000` | Timeout of the one request that cuts clips (the shorts agent), 1000 to 600000: its prompt holds a whole transcript and Opus may think first. A timeout falls back on the rule-based clips. |
@@ -352,6 +356,55 @@ terms do not allow routing subscription credentials through third-party applicat
 to its participating apps. It is meant for a private, single-operator installation; anyone else should use their own API
 keys with `openai-compatible`.
 
+## Conversation (optional)
+
+Off by default. When `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` are set, the session page shows a
+**Conversation** card above the setup: join, mute and unmute, camera on and off, leave and a grid of everyone who is in the
+call (remote screen shares get a full-width tile). Participants join through the same invite link as for recording; there
+is no second link and no account. The interface is available in English and Polish.
+
+- **Server.** `POST /api/sessions/:sid/call-token` (participant token required, session not ended) returns a LiveKit access
+  token (HS256 JWT signed with the API secret), the signalling URL, the room `sr-<sessionId>` (one room per session,
+  created by LiveKit on the first join) and the participant's identity (their participant id). The token lives
+  `LIVEKIT_TOKEN_TTL_SECONDS` (10 minutes by default). Everyone may publish microphone, camera and screen and may
+  subscribe, nothing else. The host additionally gets `roomAdmin` and a data channel, so mute and remove controls can be
+  added later without a new kind of token. Nobody gets `hidden` or `recorder`. The API secret never leaves the server; the
+  browser only ever sees its own short-lived token. The page's Content-Security-Policy allows connections to that one
+  LiveKit origin (`connect-src`) and no other. When the three variables are unset the endpoint answers `503`, the policy
+  stays `connect-src 'self'`, and the `livekit-client` code is not even downloaded: the LiveKit client is loaded only
+  when someone presses **Join the conversation**.
+- **Deployment.** Point `LIVEKIT_URL` at your LiveKit server (the key and secret come from its configuration, for
+  example `keys:` in `livekit.yaml`). Keep them in the environment or in your secret store, never in the repository.
+  The server needs the usual LiveKit ports open (443 for `wss://` and TURN/TLS, 7881/tcp, 7882/udp, 3478/udp).
+- **Joining muted.** If the participant has not confirmed headphones, the call is joined muted, so that speakers do not
+  feed the call; unmuting is one click.
+
+### How the conversation relates to the recording
+
+The conversation is a second consumer of the same devices, never a second capture and never part of the recording path:
+
+| | Recording (unchanged) | Conversation |
+| --- | --- | --- |
+| Source | The microphone, camera and screen the browser opened (`getUserMedia`, `getDisplayMedia`) | A **clone** (`MediaStreamTrack.clone()`) of exactly those tracks: same device, same raw settings, no second picker, no second permission |
+| Where it goes | `MediaRecorder` to OPFS, uploaded to the collector | LiveKit, live only |
+| Quality | Full quality, independent of the network | Simulcast, adapts to the network |
+| Mute / camera off / leave | Never affects it | Changes only the clone (`enabled` flag of the clone) |
+| Failure (token, LiveKit down, network) | Keeps recording | A message on the Conversation card; nothing else changes |
+| Stored? | Yes, per participant, in the manifest | No. LiveKit does not record: no egress, no composite |
+
+Consequences you can rely on:
+
+- Start, stop, the headphones and consent steps, markers, the clock handshake, crash recovery and the manifest are not
+  touched. The master recordings are the per-participant local files, exactly as before.
+- The screen you record is the screen you show in the conversation (one picker, one capture); stopping the share ends
+  both. Your own screen is not drawn back to you.
+- The conversation continues between takes. Ending the session (by the host) leaves everyone's call.
+- Camera in the conversation follows "Record my camera": without a recorded camera there is nothing to send.
+- Echo: the microphone is raw on purpose (no echo cancellation), because it is the master recording. Use headphones, as the
+  setup already asks; without them the other side may hear themselves. Joining muted is the safeguard, not a cure.
+- Not covered here: a participant that is not on a Chromium desktop browser cannot record, so they cannot be part of
+  the conversation either (the conversation takes its devices from the recording setup).
+
 ## Telemetry
 
 Off by default. Nothing is sent, no connection is opened and the build contains no key or host unless the operator sets both
@@ -450,6 +503,11 @@ deletes the export. `tests/e2e/layout.spec.ts` uses a two-camera session: it cha
 and checks the live preview's geometry, edits and resets a scene by hand, undoes the layout with the keyboard, reloads,
 seeks the preview with the test hook, cancels a 4K export and renders a vertical one.
 
+`tests/e2e/call.spec.ts` needs a LiveKit server binary: set `LIVEKIT_E2E_BIN` to a `livekit-server` executable and it is
+started in dev mode with throw-away keys next to the collector (`playwright.config.ts`); without it the spec is skipped. It joins
+the conversation from two browsers and checks that tiles, mute and leave work and that muting, turning the camera off
+and leaving never change the recorded tracks.
+
 It launches Chromium itself, so install one first (`npx playwright install chromium`) or pick an installed browser with
 `E2E_BROWSER_CHANNEL=chrome`. To attach to a Chromium you started yourself, set `E2E_CDP_URL`; for `session.spec.ts` it
 must have been started with the flags in `FAKE_MEDIA_ARGS` (see `tests/e2e/session.spec.ts`). The test runs with one
@@ -459,6 +517,8 @@ capture source, which `FAKE_MEDIA_ARGS` does) and, during the take, stops that s
 ## Limits and honest notes
 
 - Chromium only. Safari and Firefox are not supported.
+- The conversation (see above) needs a LiveKit server you run; UDP and TCP media fallbacks and TURN depend on its deployment.
+  A guest who cannot reach it still records normally.
 - There is no rate limiting and no session expiry on the collector. Put it behind a reverse proxy and use
   `SESSION_CREATE_KEY` if it is reachable from the internet.
 - Tokens are passed in the `Authorization` header, except the live event stream, which uses a query parameter because

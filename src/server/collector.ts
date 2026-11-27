@@ -150,7 +150,16 @@ export class Collector {
       ended: runtime.record.endedAtMs !== null,
       maxParticipants: MAX_PARTICIPANTS,
       roster: this.roster(runtime),
+      callEnabled: this.config.call !== null,
     };
+  }
+
+  /** Who the caller is in the call: only a participant of a session that has not ended may get a call token. */
+  async callParticipant(sid: string, pid: string): Promise<{ name: string; host: boolean }> {
+    const runtime = await this.load(sid);
+    const caller = this.participant(runtime, pid);
+    if (runtime.record.endedAtMs !== null) throw new HttpError(409, "session_ended");
+    return { name: caller.name, host: caller.host };
   }
 
   async claimToken(sid: string, pid: string): Promise<ClaimLinkResponse> {
