@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { audioConformFilter, timelineEndOf, videoProxyFilter } from "../../src/server/post/conform.js";
+import { audioConformFilter, timelineEndOf, videoProxyFilter, videoTimelineFilter } from "../../src/server/post/conform.js";
 import { estimateDrift } from "../../src/shared/drift.js";
 import type { ProjectFile } from "../../src/shared/project.js";
 import { issueToken } from "../../src/server/tokens.js";
@@ -185,5 +185,30 @@ describe.runIf(hasFfmpeg())("conform of a synthetic session (known offsets, drif
     const guest = issueToken(SECRET, { sid: SID, role: "participant", pid: "p2-bartek", host: false, exp: Date.now() + 3_600_000 });
     expect((await api(server, "GET", `/api/sessions/${SID}/project`, { token: guest })).status).toBe(403);
     expect((await api(server, "GET", `/api/sessions/${SID}/project`)).status).toBe(401);
+  });
+});
+
+describe.runIf(hasFfmpeg())("proxy filter order", () => {
+  const run = promisify(execFile);
+
+  it("places the same frames whether the scaling runs before or after the frame rate conversion", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "conform-order-"));
+    try {
+      // a 7 fps source is converted up to 30 fps: the conversion repeats frames
+      const source = path.join(dir, "in.mkv");
+      await run("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=7:duration=3", "-c:v", "libx264", source]);
+      const timestamps = async (filter: string): Promise<string> => {
+        const out = path.join(dir, "out.mp4");
+        await run("ffmpeg", ["-v", "error", "-y", "-i", source, "-an", "-vf", filter, "-c:v", "libx264", "-f", "mp4", out]);
+        const { stdout } = await run("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "frame=pts_time", "-of", "csv=p=0", out]);
+        return stdout;
+      };
+      const scale = ["scale=-2:90:flags=bilinear"];
+      const source1 = { rate: 1, offsetMs: 21.3 };
+      expect(await timestamps(videoTimelineFilter(source1, 30, scale, true))).toBe(await timestamps(videoTimelineFilter(source1, 30, scale, false)));
+      expect(videoProxyFilter(source1, 30).indexOf("scale=")).toBeLessThan(videoProxyFilter(source1, 30).indexOf("fps="));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
