@@ -18,6 +18,8 @@ export interface SyntheticParticipant {
   /** Drift of the client clock against the server clock in ppm (what the handshake samples reveal). */
   clientClockPpm: number;
   camera: boolean;
+  /** Level of the tone bursts in dB relative to full scale (default 0): a microphone recorded far too quiet. */
+  gainDb?: number;
   /** Use this audio file (speech, noise, silence) instead of the tone bursts. Its length sets the track length; offset and drift still apply. */
   audioFile?: string;
   /** Share of camera frames dropped to make the frame rate variable, 0..1. */
@@ -84,7 +86,7 @@ export async function makeSyntheticSession(options: SyntheticOptions): Promise<S
   const sessionDir = path.join(options.storageDir, "session", options.sessionId);
 
   for (const [index, spec] of options.participants.entries()) {
-    const pid = `p${index + 1}-${spec.name.toLowerCase()}`;
+    const pid = `p${index + 1}-${spec.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
     const dir = path.join(sessionDir, pid);
     await mkdir(dir, { recursive: true });
     const rate = 1 + spec.audioPpm * 1e-6;
@@ -100,7 +102,7 @@ export async function makeSyntheticSession(options: SyntheticOptions): Promise<S
     } else {
       await ffmpeg([
         "-f", "lavfi", "-i", `sine=frequency=${900 + index * 150}:sample_rate=48000:duration=${mediaSec.toFixed(4)}`,
-        "-af", `volume=0:enable='1-(${window(positions, BURST_SEC)})'`,
+        "-af", `volume=${spec.gainDb ?? 0}dB,volume=0:enable='1-(${window(positions, BURST_SEC)})'`,
         "-c:a", "libopus", "-b:a", "48k", "-f", "webm", audio,
       ]);
     }

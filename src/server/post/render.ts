@@ -11,6 +11,7 @@ import { frameMs } from "../../shared/project.js";
 import type { Config } from "../config.js";
 import { TRANSCRIPT_FILE } from "./transcribe.js";
 import { readEdl } from "./edl-store.js";
+import { boostFilter, microphoneLevels } from "./mic-levels.js";
 import { cleanInputsGraph, DEFAULT_CLEAN, prepareClean, type CleanOptions, type CleanTrack } from "./audio-clean.js";
 import { cardsOf, layoutSources, resolveScenes } from "./layout-plan.js";
 import { FONTS_DIR, layoutVideoGraph } from "./render-layout.js";
@@ -183,23 +184,23 @@ export function renderHandler(deps: RenderDeps) {
     const inputs: RenderInput[] = audioSources.map((source) => ({ file: path.join(dir, source.audio?.file ?? "") }));
     const cleanOptions = parseClean(job.params.clean, deps.config);
     const cleanDir = path.join(dir, "tmp", `${job.id}-clean`);
-    let wired: { lines: string[]; labels: string[] } | undefined;
+    const { levels: levelsById, boosts } = await microphoneLevels(project, dir);
+    const lifted = audioSources.map((source, index) => ((boosts.get(source.id) ?? 0) > 0 ? { line: `[${index}:a]${boostFilter(boosts.get(source.id) ?? 0)}[bo${index}]`, label: `[bo${index}]` } : null));
+    let wired: { lines: string[]; labels: string[] } | undefined = lifted.some(Boolean)
+      ? { lines: lifted.flatMap((item) => (item ? [item.line] : [])), labels: lifted.map((item, index) => item?.label ?? `[${index}:a]`) }
+      : undefined;
     if (cleanOptions) {
       // microphones only: the sound of a shared screen stays in the mix as it is
       const mics = audioSources.map((source, index) => ({ source, index })).filter(({ source }) => source.kind !== "screen");
-      const tracks: CleanTrack[] = [];
-      for (const { source } of mics) {
-        const levels = await readFile(path.join(dir, source.audio?.levels ?? ""));
-        tracks.push({ id: source.id, file: path.join(dir, source.audio?.file ?? ""), levels: new Int8Array(levels.buffer, levels.byteOffset, levels.byteLength) });
-      }
+      const tracks: CleanTrack[] = mics.map(({ source }) => ({ id: source.id, file: path.join(dir, source.audio?.file ?? ""), levels: levelsById.get(source.id) as Int8Array }));
       await mkdir(cleanDir, { recursive: true });
       const prepared = await prepareClean(cleanOptions, tracks, cleanDir);
       const first = inputs.length;
       prepared.extraInputs.forEach((file, i) => inputs.push({ file, args: prepared.inputArgs[i] ?? [] }));
-      const cleaned = cleanInputsGraph(prepared, mics.map(({ index }) => index), first);
-      const labels = audioSources.map((_, index) => `[${index}:a]`);
+      const cleaned = cleanInputsGraph(prepared, mics.map(({ index }) => index), first, mics.map(({ index }) => lifted[index]?.label ?? `[${index}:a]`));
+      const labels = wired?.labels ?? audioSources.map((_, index) => `[${index}:a]`);
       mics.forEach(({ index }, k) => { labels[index] = cleaned.labels[k] as string; });
-      wired = { lines: cleaned.lines, labels };
+      wired = { lines: [...(wired?.lines ?? []), ...cleaned.lines], labels };
     }
     const audio = audioProgramGraph(audioSources.length, kept, project.durationMs, undefined, wired);
     let measured: Measured | null = null;
