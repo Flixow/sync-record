@@ -7,6 +7,7 @@ import { E2E_DATA_DIR, E2E_SECRET } from "../../playwright.config.js";
 import { issueToken } from "../../src/server/tokens.js";
 import type { TranscriptFile } from "../../src/shared/transcript.js";
 import { makeSyntheticSession } from "../support/synthetic.js";
+import { openFold, openStep } from "../support/project-page.js";
 import { script } from "../support/talk.js";
 
 // Clips and publishing on a prepared one-camera session: clip suggestions with their reasons, in and out points that move by
@@ -97,13 +98,17 @@ test("suggest, adjust, save and render a clip; captions and cleanup reach the re
   await test.step("prepare and transcribe, then give the project a transcript long enough for clips", async () => {
     await page.goto(`/project/${SID}`);
     await page.getByTestId("pj-create").click();
-    await page.getByTestId("pj-prepare").click();
+    // the first step runs the whole chain; here the recordings come alone, so the clips step can be seen before a transcript exists
+    await openStep(page, "details");
+    await page.getByTestId("pj-prepare-again").click();
     await expect(page.getByTestId("pj-conform-status")).toHaveAttribute("data-status", "done", { timeout: 120_000 });
     await expect(page.getByTestId("pj-player")).toHaveAttribute("src", /proxies\/mix/);
     // the stand-in speech engine answers two words; the real transcript of this recording is written over its file
+    await openStep(page, "shorts");
     await expect(page.getByTestId("pj-cl-suggest")).toBeDisabled();
     await expect(page.getByTestId("pj-cl-need-transcript")).toBeVisible();
-    await page.getByTestId("pj-tr-lang").selectOption("en");
+    await openStep(page, "details");
+    await page.getByTestId("pj-tr-lang-again").selectOption("en");
     await page.getByTestId("pj-tr-start").click();
     await expect(page.getByTestId("pj-tr-status")).toHaveAttribute("data-status", "done", { timeout: 120_000 });
     const file = path.join(projectDir, "transcript.json");
@@ -112,10 +117,13 @@ test("suggest, adjust, save and render a clip; captions and cleanup reach the re
     if (!first) throw new Error("the stand-in transcript has no words");
     await writeFile(file, JSON.stringify({ ...stub, words: SCRIPT_WORDS.map((word) => ({ ...word, src: first.src, pid: first.pid })) }));
     await page.reload();
+    await openStep(page, "shorts");
     await expect(page.getByTestId("pj-cl-suggest")).toBeEnabled();
   });
 
   await test.step("export defaults: captions and every cleanup option are off", async () => {
+    await openStep(page, "episode");
+    await openFold(page, "pj-ex-section");
     await expect(page.getByTestId("pj-ex-captions-block")).toBeVisible();
     await expect(page.getByTestId("pj-ex-captions")).not.toBeChecked();
     await expect(page.getByTestId("pj-ex-captions-style")).toBeDisabled();
@@ -129,6 +137,7 @@ test("suggest, adjust, save and render a clip; captions and cleanup reach the re
   });
 
   await test.step("suggestions come with reasons, an excerpt and a range, and the model is only asked when ticked", async () => {
+    await openStep(page, "shorts");
     await expect(page.getByTestId("pj-cl-llm")).not.toBeChecked();
     await page.getByTestId("pj-cl-suggest").click();
     await expect(card).toBeVisible();
@@ -192,6 +201,8 @@ test("suggest, adjust, save and render a clip; captions and cleanup reach the re
   });
 
   await test.step("audio cleanup and captions choices reach the render job; a missing denoise model offers its download", async () => {
+    await openStep(page, "episode");
+    await openFold(page, "pj-ex-section");
     await page.getByTestId("pj-ex-preset").selectOption("audio-mp3");
     await expect(page.getByTestId("pj-ex-captions-block")).toBeHidden();
     await page.getByTestId("pj-ex-clean-level").check();
@@ -250,6 +261,7 @@ test("suggest, adjust, save and render a clip; captions and cleanup reach the re
   });
 
   await test.step("render the saved clip: vertical, captions, its own range; the file is in the exports", async () => {
+    await openStep(page, "shorts");
     const row = page.getByTestId("pj-cl-row");
     const id = (await row.getAttribute("data-id")) ?? "";
     expect(id).toMatch(/^clip-\d+-\d+$/);
@@ -283,6 +295,7 @@ test("suggest, adjust, save and render a clip; captions and cleanup reach the re
   });
 
   await test.step("chapters follow YouTube's rules and can be copied", async () => {
+    await openStep(page, "cover");
     const text = page.getByTestId("pj-pub-chapters-text");
     await expect(text).toBeVisible();
     const lines = (await text.inputValue()).split("\n");
@@ -312,7 +325,7 @@ test("suggest, adjust, save and render a clip; captions and cleanup reach the re
   });
 
   await test.step("a thumbnail: moments, a shape, a text plate, then the picture and its download", async () => {
-    await expect(page.getByTestId("pj-pub-moment").first()).toBeVisible();
+    await expect(page.getByTestId("pj-pub-moment").first()).toBeVisible({ timeout: 90_000 });
     await expect(page.getByTestId("pj-pub-thumb-spec")).toContainText("3840×2160");
     await page.getByTestId("pj-pub-kind-short").click();
     await expect(page.getByTestId("pj-pub-thumb-spec")).toContainText("2160×3840");

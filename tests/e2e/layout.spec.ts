@@ -6,6 +6,7 @@ import { chromium, expect, test, type Browser, type Page } from "@playwright/tes
 import { E2E_DATA_DIR, E2E_SECRET } from "../../playwright.config.js";
 import { issueToken } from "../../src/server/tokens.js";
 import { makeSyntheticSession } from "../support/synthetic.js";
+import { openFold, openStep, prepareRecordings } from "../support/project-page.js";
 
 // The layout section on a prepared two-camera session: Ala talks first, Bob answers, and so on. The scenes follow the
 // speakers, the layout / shape / background change the live preview, a manual scene survives a reload, the keys undo
@@ -100,8 +101,9 @@ test("layout of a two-camera program: scenes, live preview, manual scenes, undo,
     await page.goto(`/project/${SID}`);
     await page.getByTestId("pj-create").click();
     await expect(page.getByTestId("pj-layout")).toHaveCount(0);
-    await page.getByTestId("pj-prepare").click();
-    await expect(page.getByTestId("pj-conform-status")).toHaveAttribute("data-status", "done", { timeout: 120_000 });
+    await prepareRecordings(page);
+    await openStep(page, "episode");
+    await openFold(page, "pj-lay-section");
     await expect(page.getByTestId("pj-layout")).toBeVisible();
     await expect(page.getByTestId("pj-lay-video")).toHaveCount(2);
     await expect(canvas).toBeVisible();
@@ -179,6 +181,8 @@ test("layout of a two-camera program: scenes, live preview, manual scenes, undo,
 
   await test.step("shape, background and layout are still there after a reload", async () => {
     await page.reload();
+    await openStep(page, "episode");
+    await openFold(page, "pj-lay-section");
     await expect(page.getByTestId("pj-layout")).toBeVisible();
     await expect(page.getByTestId("pj-lay-layout-side-by-side")).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("pj-lay-aspect-9:16")).toHaveAttribute("aria-pressed", "true");
@@ -207,6 +211,8 @@ test("layout of a two-camera program: scenes, live preview, manual scenes, undo,
   });
 
   await test.step("a heavy export can be cancelled", async () => {
+    await openStep(page, "episode");
+    await openFold(page, "pj-ex-section");
     await page.getByTestId("pj-ex-preset").selectOption("youtube-2160p60");
     await page.getByTestId("pj-ex-render").click();
     await expect(page.getByTestId("pj-ex-progress")).toBeVisible({ timeout: 30_000 });

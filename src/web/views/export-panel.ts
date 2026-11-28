@@ -22,12 +22,21 @@ const GATE_DEFAULT_DB = -30;
 export interface ExportPanelHooks {
   /** Runs a call that changes the project: shows its error and refreshes the page's state. */
   run: (action: () => Promise<unknown>) => Promise<void>;
+  /** The list of finished exports, on every change (the page marks its steps by it). */
+  onList?: (exports: ExportRecord[]) => void;
+  /** The kind of file the form is set to render, whenever it may have changed. */
+  onFormat?: (kind: "video" | "audio") => void;
 }
 
 export interface ExportPanel {
+  /** The settings: format, captions, loudness, cleanup and the render button. */
   el: HTMLElement;
+  /** What is being made and what is made: the progress of a render and the list of finished files. */
+  files: HTMLElement;
   /** The page's latest state: the render job, the settings and whether the media are there. */
   update(state: ProjectState): void;
+  /** Renders with the settings of the form, like its Render button; false (and nothing started) when a value is out of range. */
+  start(): boolean;
   dispose(): void;
 }
 
@@ -114,11 +123,13 @@ export function exportPanel(api: ProjectApi, hooks: ExportPanelHooks): ExportPan
   const listHost = h("div", { "data-testid": "pj-ex-list" });
 
   function syncControls(): void {
-    captionsBlock.hidden = presetById(presetSelect.value)?.kind !== "video";
+    const kind = presetById(presetSelect.value)?.kind ?? "audio";
+    captionsBlock.hidden = kind !== "video";
     captionsToggle.disabled = !transcriptReady;
     captionsStyle.disabled = !transcriptReady || !captionsToggle.checked;
     captionsNeed.hidden = transcriptReady;
     gateDb.disabled = !gateToggle.checked;
+    hooks.onFormat?.(kind);
   }
 
   function renderDenoise(): void {
@@ -153,18 +164,18 @@ export function exportPanel(api: ProjectApi, hooks: ExportPanelHooks): ExportPan
     });
   }
 
-  function start(): void {
+  function start(): boolean {
     const lufs = Number(lufsInput.value);
     const truePeakDb = Number(peakInput.value);
     if (!inRange(lufs, LUFS_RANGE) || !inRange(truePeakDb, TRUE_PEAK_RANGE)) {
       setChildren(formError, banner("error", t("pj.ex.invalid"), "pj-ex-invalid"));
       advanced.open = true;
-      return;
+      return false;
     }
     const bleedGateDb = Number(gateDb.value);
     if (gateToggle.checked && !inRange(bleedGateDb, GATE_RANGE)) {
       setChildren(formError, banner("error", t("pj.ex.invalidGate"), "pj-ex-invalid-gate"));
-      return;
+      return false;
     }
     setChildren(formError);
     const preset = presetById(presetSelect.value);
@@ -189,9 +200,11 @@ export function exportPanel(api: ProjectApi, hooks: ExportPanelHooks): ExportPan
         if (!disposed) renderDenoise();
       }
     });
+    return true;
   }
 
   function renderList(): void {
+    hooks.onList?.(exports);
     if (exports.length === 0) {
       setChildren(listHost, h("p", { class: "hint", "data-testid": "pj-ex-empty" }, t("pj.ex.empty")));
       return;
@@ -327,19 +340,19 @@ export function exportPanel(api: ProjectApi, hooks: ExportPanelHooks): ExportPan
     h("div", { class: "row" }, renderButton),
     formError,
     needMedia,
-    progressHost,
-    statusHost,
     note,
-    h("h4", {}, t("pj.ex.list")),
-    listHost,
   );
+  const files = h("div", { class: "stack", "data-testid": "pj-exports" }, progressHost, statusHost, h("h4", {}, t("pj.ex.list")), listHost);
 
   return {
     el,
+    files,
     update,
+    start,
     dispose() {
       disposed = true;
       el.replaceChildren();
+      files.replaceChildren();
     },
   };
 }

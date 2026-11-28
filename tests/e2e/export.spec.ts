@@ -6,6 +6,7 @@ import { chromium, expect, test, type Browser, type Page } from "@playwright/tes
 import { E2E_DATA_DIR, E2E_SECRET } from "../../playwright.config.js";
 import { issueToken } from "../../src/server/tokens.js";
 import { makeSyntheticSession } from "../support/synthetic.js";
+import { openFold, openStep, prepareEpisode } from "../support/project-page.js";
 
 // The export section on a prepared session: an audio export of an edited program (the cuts are in the file), the finished
 // export in the list with a working download, the preview media removed after it (the default retention) while the
@@ -74,11 +75,7 @@ test("export an edited program, download it, keep working after the media were r
   await test.step("prepare, transcribe and cut two words", async () => {
     await page.goto(`/project/${SID}`);
     await page.getByTestId("pj-create").click();
-    await page.getByTestId("pj-prepare").click();
-    await expect(page.getByTestId("pj-conform-status")).toHaveAttribute("data-status", "done", { timeout: 120_000 });
-    await page.getByTestId("pj-tr-lang").selectOption("en");
-    await page.getByTestId("pj-tr-start").click();
-    await expect(page.getByTestId("pj-tr-status")).toHaveAttribute("data-status", "done", { timeout: 120_000 });
+    await prepareEpisode(page);
     const words = page.locator('[data-testid="pj-transcript"] .w');
     await words.nth(0).click();
     await words.nth(1).click({ modifiers: ["Shift"] });
@@ -91,6 +88,8 @@ test("export an edited program, download it, keep working after the media were r
   expect(kept).toBeLessThan(total);
 
   await test.step("an audio-only project offers the audio formats, with the loudness settings of the server in the advanced section", async () => {
+    await openStep(page, "episode");
+    await openFold(page, "pj-ex-section");
     await expect(page.getByTestId("pj-ex-preset")).toHaveValue("audio-mp3");
     await expect(page.getByTestId("pj-ex-preset").locator('option[data-kind="video"]').first()).toBeDisabled();
     await expect(page.getByTestId("pj-ex-source")).toBeHidden();
@@ -110,13 +109,16 @@ test("export an edited program, download it, keep working after the media were r
   });
 
   await test.step("render an MP3: progress, then a row with a working download", async () => {
-    await page.getByTestId("pj-ex-render").click();
+    // the button of the step starts the render with the values of the form
+    await expect(page.getByTestId("pj-ep-export")).toHaveText("Export audio");
+    await page.getByTestId("pj-ep-export").click();
     await expect(page.getByTestId("pj-ex-row")).toHaveCount(1, { timeout: 120_000 });
     const row = page.getByTestId("pj-ex-row");
     await expect(row).toHaveAttribute("data-preset", "audio-mp3");
     await expect(row).toContainText("LUFS");
     await expect(page.getByTestId("pj-ex-progress")).toHaveCount(0);
     await expect(page.getByTestId("pj-ex-render")).toBeEnabled();
+    await expect(page.getByTestId("pj-step-episode")).toHaveAttribute("data-mark", "done");
 
     const href = (await page.getByTestId("pj-ex-download").getAttribute("href")) ?? "";
     expect(await page.getByTestId("pj-ex-download").getAttribute("download")).toMatch(/\.mp3$/);
@@ -151,6 +153,7 @@ test("export an edited program, download it, keep working after the media were r
   });
 
   await test.step("preparing the media again brings the player back", async () => {
+    await openStep(page, "prepare");
     await page.getByTestId("pj-prepare").click();
     await expect(page.getByTestId("pj-conform-status")).toHaveAttribute("data-status", "done", { timeout: 120_000 });
     await expect(page.getByTestId("pj-ed-nomedia")).toBeHidden();
@@ -159,6 +162,7 @@ test("export an edited program, download it, keep working after the media were r
   });
 
   await test.step("delete the export", async () => {
+    await openStep(page, "episode");
     const href = (await page.getByTestId("pj-ex-download").getAttribute("href")) ?? "";
     await page.getByTestId("pj-ex-delete").click();
     await expect(page.getByTestId("pj-ex-row")).toHaveCount(0);

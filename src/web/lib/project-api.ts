@@ -3,7 +3,7 @@ import type { ClipProject, ClipSuggestion } from "../../shared/clips.js";
 import type { Edl, Range } from "../../shared/edl.js";
 import type { Aspect, Background, LayoutSource } from "../../shared/layout.js";
 import type { JobRecord, ProjectFile } from "../../shared/project.js";
-import type { PublishDraft, ThumbnailKind, ThumbnailSpec } from "../../shared/publish.js";
+import type { PublishDraft, ThumbnailKind } from "../../shared/publish.js";
 import type { Span } from "../../shared/scene-plan.js";
 import type { Scene, SceneOverride, ScenePlan } from "../../shared/scenes.js";
 import type { Silence } from "../../shared/silence.js";
@@ -134,10 +134,17 @@ export interface ScenePlanSuggestion {
   cuts: Span[];
 }
 
-/** Suggested moments (project time, ms) for a thumbnail, and the picture it has to be. */
-export interface ThumbnailCandidates {
-  spec: ThumbnailSpec;
-  candidates: number[];
+/** Headline options for a thumbnail frame, from the words spoken there. */
+export interface ThumbnailHooksReport {
+  /** Up to three options of at most five words. */
+  hooks: string[];
+  /** What is said at the frame. */
+  sentence: string;
+  /** The title the options were made not to repeat. */
+  title: string;
+  llmUsed: boolean;
+  llmAvailable: boolean;
+  llmFailure: string | null;
 }
 
 async function call<T>(token: string, method: string, path: string, json?: unknown, keepalive = false): Promise<T> {
@@ -190,7 +197,9 @@ export class ProjectApi implements EdlBackend, ScenesBackend {
   suggestClips = (limit: number, llm: boolean) => call<ClipSuggestions>(this.token, "POST", this.path("/clips/suggest"), { limit, llm });
   chapters = () => call<ChaptersReport>(this.token, "GET", this.path("/chapters"));
   publishDraft = (llm: boolean) => call<PublishDraftReport>(this.token, "POST", this.path("/publish/draft"), { llm });
-  thumbnails = (kind: ThumbnailKind) => call<ThumbnailCandidates>(this.token, "GET", this.path(`/thumbnails?kind=${kind}`));
+  /** Queues the pictures of the best moments, or (with `around`) of the moments just before and after one; read the job's `ThumbnailPreviewsResult`. */
+  thumbnailPreviews = (kind: ThumbnailKind, around?: number) => call<JobRecord>(this.token, "POST", this.path("/thumbnail/previews"), { kind, ...(around === undefined ? {} : { around }) });
+  thumbnailHooks = (atMs: number, llm: boolean, title?: string) => call<ThumbnailHooksReport>(this.token, "POST", this.path("/thumbnail/hooks"), { atMs, llm, ...(title ? { title } : {}) });
   /** Downloads the denoiser model onto the server: the one request of post-production that reaches the internet. */
   downloadDenoiseModel = () => call<{ ok: boolean }>(this.token, "POST", this.path("/audio/denoise-model"));
 

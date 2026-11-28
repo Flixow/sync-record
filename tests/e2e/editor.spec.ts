@@ -8,6 +8,7 @@ import { issueToken } from "../../src/server/tokens.js";
 import type { Range } from "../../src/shared/edl.js";
 import type { Silence } from "../../src/shared/silence.js";
 import { makeSyntheticSession } from "../support/synthetic.js";
+import { openFold, prepareEpisode } from "../support/project-page.js";
 
 // The editor on a prepared session: a synthetic recording (tone bursts long enough to count as speech, silence between
 // them) is written to the collector's storage, the host's credentials are put in the browser, and the project page is
@@ -109,11 +110,7 @@ test("cut words and silences on the project page, undo, persistence and a render
   await test.step("create the project, prepare the media and transcribe", async () => {
     await page.goto(`/project/${SID}`);
     await page.getByTestId("pj-create").click();
-    await page.getByTestId("pj-prepare").click();
-    await expect(page.getByTestId("pj-conform-status")).toHaveAttribute("data-status", "done", { timeout: 120_000 });
-    await page.getByTestId("pj-tr-lang").selectOption("en");
-    await page.getByTestId("pj-tr-start").click();
-    await expect(page.getByTestId("pj-tr-status")).toHaveAttribute("data-status", "done", { timeout: 120_000 });
+    await prepareEpisode(page);
     await expect(page.getByTestId("pj-transcript")).toContainText("Hello,");
     await expect(page.getByTestId("pj-ed-timeline")).toBeVisible();
   });
@@ -258,6 +255,7 @@ test("cut words and silences on the project page, undo, persistence and a render
   });
 
   await test.step("find silences, review them and apply some", async () => {
+    await openFold(page, "pj-tr-tools"); // pauses and the listening copy sit in the folded tools of the transcript
     await page.getByTestId("pj-ed-si-find").click();
     const rows = page.getByTestId("pj-ed-si-row");
     await expect(rows.first()).toBeVisible();
@@ -308,6 +306,7 @@ test("cut words and silences on the project page, undo, persistence and a render
   });
 
   await test.step("render the preview and hear the joins", async () => {
+    await openFold(page, "pj-tr-tools");
     const edited = await keptMs(page);
     // the player is created once: a flag set on it survives the page's status refreshes while the job runs
     await page.getByTestId("pj-player").evaluate((audio: HTMLAudioElement & { kept?: boolean }) => {
