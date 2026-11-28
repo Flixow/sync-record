@@ -109,6 +109,9 @@ export interface ChaptersReport {
   chapters: Chapter[];
   validation: ChapterValidation;
   text: string;
+  /** The titles come from the language model (otherwise from the keyword rules). */
+  llmUsed: boolean;
+  llmAvailable: boolean;
 }
 
 export interface PublishDraftReport {

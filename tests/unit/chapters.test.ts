@@ -251,3 +251,13 @@ describe("chapters for YouTube", () => {
     }
   });
 });
+
+describe("filler words in keyword titles", () => {
+  it("never make a Polish chapter title out of chatter at the start of a recording", () => {
+    const text = "Noo dobra no noo dobra. Dobra noo, włączyłem nagrywanie, noo dobra. Włączyłem nagrywanie i wiesz, dobra, noo.";
+    const words: TranscriptWord[] = text.split(" ").map((t, i) => ({ t, s: i * 400, e: i * 400 + 300, src: "s", pid: "a" }));
+    const title = chapterTitles({ s: 0, e: words.length * 400 }, words, { lang: "pl" }).toLowerCase();
+    expect(title).not.toMatch(/\b(noo?|dobra|wiesz)\b/u);
+    expect(title).toContain("nagrywani");
+  });
+});

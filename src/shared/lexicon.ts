@@ -18,6 +18,7 @@ const STOP_EN = set(`
   while who whom whose why will with won would wouldn yeah yes yep you your yours yourself yourselves one two three going know
   think mean thing things actually kind sort okay right oh well got want need make made take took come came look see seen
   said says told tell sure thanks thank please mhm hmm yes new first second last next good great
+  hey hello hi hmm uh um uhm basically literally totally probably definitely stuff guys gonna wanna
 `);
 
 const STOP_PL = set(`
@@ -27,7 +28,9 @@ const STOP_PL = set(`
   przed przez przy sobie tak także takie taki taka tam tego tej ten też tego teraz tutaj tych tylko tym wiec więc wiele wszyscy
   wszystko wszystkie właśnie wtedy zatem również żeby jestem jesteś jesteśmy jest są był była było były będzie będą jeśli
   dobrze okej super trochę natomiast innych inne inny własne każde jakie ktoś nich nimi nami wami one oni ona ono ten ta to
-  aha eee yyy tzn itd itp się trzy dwa dwie kilka gdzie wszystkim tego nowy nowe lub albo ani został została zostało zostały pierwszy pierwsza pierwsze
+  aha eee yyy no noo nooo nom dobra dobre okey ok wiesz słuchaj słuchajcie znaczy jakby kurde hej cześć siema halo dzięki dziękuję witam witajcie
+  mówię mówisz mówi powiedzieć powiem ogólnie generalnie normalnie po prostu właściwie praktycznie troszkę trochę chyba pewnie oczywiście
+  tzn itd itp się trzy dwa dwie kilka gdzie wszystkim tego nowy nowe lub albo ani został została zostało zostały pierwszy pierwsza pierwsze
 `);
 
 export const STOP_WORDS: ReadonlySet<string> = new Set([...STOP_EN, ...STOP_PL]);

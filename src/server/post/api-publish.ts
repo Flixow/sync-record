@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { chaptersForYoutube, formatChapters, validateChapters, wordsThroughEdl } from "../../shared/chapters.js";
+import { chaptersForYoutube, formatChapters, validateChapters, wordsThroughEdl, type Chapter } from "../../shared/chapters.js";
 import { adjustRange, DEFAULT_CLIP_LIMIT, suggestClips, type ClipProject } from "../../shared/clips.js";
 import { presetById } from "../../shared/presets.js";
 import type { ProjectFile } from "../../shared/project.js";
@@ -91,6 +91,10 @@ function parseClips(value: unknown, sid: string, durationMs: number): ClipProjec
   });
 }
 
+const CHAPTER_MEMO_MAX = 50;
+/** Model-titled chapter lists by (project, language, template list): the chapters box reloads often and must not call the model every time. */
+const chapterMemo = new Map<string, Chapter[]>();
+
 /** Clips, chapters, titles and thumbnail candidates; every one of them works without the optional language model. */
 export async function handlePublishRoutes(post: PostProduction, sid: string, rest: string[], method: string, req: IncomingMessage, res: ServerResponse, http: Http): Promise<boolean> {
   const dir = post.store.dir(sid);
@@ -136,8 +140,22 @@ export async function handlePublishRoutes(post: PostProduction, sid: string, res
     const transcript = await transcriptOf(post, sid);
     const edl = await readEdl(dir);
     const duration = project.durationMs - edl.removed.reduce((sum, range) => sum + range.e - range.s, 0);
-    const chapters = chaptersForYoutube(transcript.words, project.durationMs, edl);
-    http.json(res, 200, { chapters, validation: validateChapters(chapters, duration), text: formatChapters(chapters) });
+    const baseChapters = chaptersForYoutube(transcript.words, project.durationMs, edl);
+    // the listed chapters are the ones the description gets: the model (when the host configured one) titles them here too, once per
+    // distinct list; the keyword titles of the rules are the fallback
+    const llm = createLlmClient(new URL(req.url ?? "/", "http://x").searchParams.get("llm") === "0" ? null : post.config.post.llm);
+    const language = languageOf(transcript);
+    const memoKey = `${sid}|${language}|${baseChapters.map((chapter) => `${chapter.startMs}:${chapter.title}`).join("|")}`;
+    let titled = chapterMemo.get(memoKey) ?? null;
+    if (!titled && llm.enabled) {
+      titled = await llmChapterTitles(llm, baseChapters, wordsThroughEdl(transcript.words, edl), language);
+      if (titled) {
+        if (chapterMemo.size >= CHAPTER_MEMO_MAX) chapterMemo.delete(chapterMemo.keys().next().value as string);
+        chapterMemo.set(memoKey, titled);
+      }
+    }
+    const chapters = titled ?? baseChapters;
+    http.json(res, 200, { chapters, validation: validateChapters(chapters, duration), text: formatChapters(chapters), llmUsed: titled !== null, llmAvailable: post.config.post.llm !== null });
     return true;
   }
   if (rest[0] === "publish" && rest[1] === "draft" && rest.length === 2 && method === "POST") {
