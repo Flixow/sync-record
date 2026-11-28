@@ -6,6 +6,7 @@ import { conformHandler } from "./conform.js";
 import { JobRunner, type JobHandler } from "./jobs.js";
 import { ProjectStore } from "./projects.js";
 import { thumbnailHandler } from "./thumbnail.js";
+import { thumbnailPreviewsHandler } from "./thumbnail-previews.js";
 import { renderHandler } from "./render.js";
 import { cutPreviewHandler } from "./render-audio.js";
 import { transcribeHandler } from "./transcribe.js";
@@ -29,6 +30,7 @@ export class PostProduction {
     const handlers: Record<string, JobHandler> = {
       conform: conformHandler({ config, store: this.store, cpus: count }),
       thumbnail: thumbnailHandler({ config, store: this.store }),
+      "thumbnail-previews": thumbnailPreviewsHandler({ config, store: this.store }),
       render: renderHandler({ config, store: this.store }),
       "cut-preview": cutPreviewHandler({ config, store: this.store }),
       transcribe: transcribeHandler({ config, store: this.store, engine: this.asr, cpus: count }),

@@ -1,12 +1,14 @@
 import { readFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { chaptersForYoutube, formatChapters, validateChapters, wordsThroughEdl, type Chapter } from "../../shared/chapters.js";
+import { chaptersForYoutube, formatChapters, topKeywords, validateChapters, wordsThroughEdl, type Chapter } from "../../shared/chapters.js";
 import { adjustRange, DEFAULT_CLIP_LIMIT, suggestClips, type ClipProject } from "../../shared/clips.js";
 import { presetById } from "../../shared/presets.js";
 import type { ProjectFile } from "../../shared/project.js";
 import { SHORTS_DEFAULT_COUNT } from "../../shared/shorts.js";
-import { draftTitleAndDescription, thumbnailCandidates, thumbnailSpec, type ThumbnailKind } from "../../shared/publish.js";
+import { draftTitleAndDescription, type ThumbnailKind } from "../../shared/publish.js";
+import { fallbackHooks, mergeHooks } from "../../shared/thumb-hooks.js";
+import { sentenceContext } from "../../shared/thumb-moments.js";
 import type { TranscriptFile } from "../../shared/transcript.js";
 import { HttpError } from "../errors.js";
 import * as v from "../validate.js";
@@ -14,7 +16,7 @@ import { readEdl } from "./edl-store.js";
 import type { Http } from "./api.js";
 import type { PostProduction } from "./index.js";
 import { agentClips } from "./shorts-agent.js";
-import { createLlmClient, DEFAULT_SHORTS_TIMEOUT_MS, llmChapterTitles, llmDraft } from "./llm.js";
+import { createLlmClient, DEFAULT_SHORTS_TIMEOUT_MS, llmChapterTitles, llmDraft, llmThumbnailHooks } from "./llm.js";
 import { writeJson } from "./projects.js";
 import { TRANSCRIPT_FILE } from "./transcribe.js";
 
@@ -176,12 +178,33 @@ export async function handlePublishRoutes(post: PostProduction, sid: string, res
     http.json(res, 200, { draft: improved ?? draftTitleAndDescription(input), llmUsed, llmAvailable: post.config.post.llm !== null, llmFailure: llmUsed ? null : (llm.lastFailure ?? null), chapters, validation: validateChapters(chapters, project.durationMs - edl.removed.reduce((sum, range) => sum + range.e - range.s, 0)) });
     return true;
   }
-  if (rest[0] === "thumbnails" && rest.length === 1 && method === "GET") {
+  if (rest[0] === "thumbnail" && rest[1] === "previews" && rest.length === 2 && method === "POST") {
     const project = await post.store.require(sid);
+    const body = await http.readJson(req);
+    const params: Record<string, unknown> = { kind: (body.kind === "short" ? "short" : "video") satisfies ThumbnailKind };
+    if (body.around !== undefined) {
+      const around = v.num(body.around, "around");
+      if (around < 0 || around > project.durationMs) throw new HttpError(400, "invalid_field", { field: "around" });
+      params.around = Math.round(around);
+    }
+    // the job kind is queued here and not through POST /jobs: previews are made by this panel only
+    http.json(res, 202, await post.jobs.enqueue(sid, "thumbnail-previews", params));
+    return true;
+  }
+  if (rest[0] === "thumbnail" && rest[1] === "hooks" && rest.length === 2 && method === "POST") {
+    const project = await post.store.require(sid);
+    const body = await http.readJson(req);
+    const atMs = v.num(body.atMs, "atMs");
+    if (atMs < 0 || atMs > project.durationMs) throw new HttpError(400, "invalid_field", { field: "atMs" });
     const transcript = await transcriptOf(post, sid);
-    const kind: ThumbnailKind = new URL(req.url ?? "/", "http://localhost").searchParams.get("kind") === "short" ? "short" : "video";
-    const levels = await speakerLevels(project, dir);
-    http.json(res, 200, { spec: thumbnailSpec(kind), candidates: thumbnailCandidates({ durationMs: project.durationMs, highlights: project.highlights.map((h) => ({ tMs: h.atMs })), words: transcript.words, levels }) });
+    const language = body.language === "pl" || body.language === "en" ? body.language : languageOf(transcript);
+    const title = typeof body.title === "string" && body.title.trim() !== "" ? body.title.trim().slice(0, 120) : (draftTitleAndDescription({ words: transcript.words, chapters: [], speakers: [], language }).titles[0] ?? "");
+    const { sentence, context } = sentenceContext(transcript.words, atMs);
+    // text only: the model reads the words spoken at the frame and the title, never a picture
+    const llm = createLlmClient(body.llm !== false ? post.config.post.llm : null);
+    const written = llm.enabled ? await llmThumbnailHooks(llm, { sentenceAroundFrame: context, title, language }) : null;
+    const rules = fallbackHooks({ sentence, title, keywords: topKeywords(transcript.words, 12, language).map((keyword) => keyword.text), language });
+    http.json(res, 200, { hooks: mergeHooks([written ?? [], rules], title), sentence, title, llmUsed: written !== null, llmAvailable: post.config.post.llm !== null, llmFailure: llm.enabled && written === null ? (llm.lastFailure ?? null) : null });
     return true;
   }
   return false;

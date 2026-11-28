@@ -221,12 +221,12 @@ const draftFor = (name: "en-clean" | "pl-clean", language: "en" | "pl", title?: 
 };
 const video = thumbnailSpec("video");
 const short = thumbnailSpec("short");
-const layout = overlayTextLayout("Dlaczego pierwsza wersja zawiodła w produkcji", short);
+const layout = overlayTextLayout("DLACZEGO PIERWSZA WERSJA ZAWIODŁA W PRODUKCJI", short, "top");
 result.s7Publish = {
   thumbnailSpec: { video, short, maxMiB: video.maxBytes / 1024 / 1024 },
   overlayShort: { ...layout, insideSafeArea: insideRect(layout.box, safeArea(short)) },
   overlayVideo: (() => {
-    const l = overlayTextLayout("Why the first version failed in production", video);
+    const l = overlayTextLayout("WHY THE FIRST VERSION FAILED", video, "left");
     return { ...l, insideSafeArea: insideRect(l.box, safeArea(video)) };
   })(),
   thumbnailCandidatesEn: thumbnailCandidates({ durationMs: base.project.durationMs, highlights: [{ tMs: 120_000 }], words: base.transcript.words, levels: base.levels }),

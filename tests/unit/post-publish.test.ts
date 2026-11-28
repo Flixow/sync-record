@@ -84,11 +84,7 @@ describe.runIf(hasFfmpeg())("clips, chapters, drafts and thumbnails", () => {
     expect(d.llmUsed).toBe(false);
   });
 
-  it("renders a 4K thumbnail with an overlay, a vertical one, and a clip with captions", async () => {
-    const candidates = await api(server, "GET", url("/thumbnails"), { token });
-    const list = (candidates.body as { candidates: number[]; spec: { width: number; height: number } });
-    expect(list.spec).toMatchObject({ width: 3840, height: 2160 });
-    expect(list.candidates.length).toBeGreaterThan(0);
+  it("renders a 4K headline thumbnail, a vertical one, and a clip with captions", async () => {
     expect((await api(server, "POST", url("/jobs"), { token, json: { kind: "thumbnail", params: { atMs: -5 } } })).status).toBe(400);
     const sized = async (kind: "video" | "short", text: string): Promise<{ width: number; height: number; bytes: number }> => {
       await api(server, "POST", url("/jobs"), { token, json: { kind: "thumbnail", params: { atMs: 61_000, kind, text } } });

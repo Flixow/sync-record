@@ -1,97 +1,124 @@
-import { mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { ProjectSource } from "../../shared/project.js";
-import { frameMs } from "../../shared/project.js";
-import { overlayTextLayout, thumbnailSpec, type ThumbnailKind } from "../../shared/publish.js";
-import { sceneAt } from "../../shared/scenes.js";
+import type { JobRecord } from "../../shared/project.js";
+import { LINE_HEIGHT_EM, OUTLINE_EM, overlayTextLayout, thumbnailSpec, type OverlayLayout, type OverlayPlacement, type ThumbnailKind } from "../../shared/publish.js";
+import type { Rect } from "../../shared/safe-area.js";
+import { parseSignalStats, textBackingNeeded } from "../../shared/thumb-score.js";
+import { defaultTextSide, parseThumbnailStyle, THUMBNAIL_COLOR_HEX, type ThumbnailColor, type ThumbnailSide } from "../../shared/thumb-style.js";
 import type { Config } from "../config.js";
 import { addExport } from "./exports.js";
 import { ffmpeg } from "./exec.js";
 import type { JobContext } from "./jobs.js";
-import { cardsOf, layoutSources, resolveScenes } from "./layout-plan.js";
 import type { ProjectStore } from "./projects.js";
-import { escapePath, FONTS_DIR, layoutVideoGraph } from "./render-layout.js";
-import { readScenes } from "./scenes-store.js";
-import type { JobRecord } from "../../shared/project.js";
+import { escapePath, FONTS_DIR } from "./render-layout.js";
+import { frameContext, PREVIEW_CANVAS, planFrame, withGraphFile, type FrameContext, type FrameRequest } from "./thumbnail-frame.js";
 
-const FPS = 30;
-/** Decoding starts this long before the wanted frame: the keyframe the seek lands on is further back than that. */
-const LEAD_MS = 4000;
+const FONT = "NotoSans-Bold.ttf";
+/** Height of the capital letters of Noto Sans Bold, in em. */
+const CAP_HEIGHT_EM = 0.714;
+const SHADOW_EM = 0.04;
+const BACKING = "black@0.55";
+
+const evenDown = (n: number): number => Math.floor(n / 2) * 2;
 
 /**
- * Thumbnail: one frame of the program (the scene plan's layout at that instant, at full size) as a JPEG, with an
- * optional text plate. The recordings are seeked, not decoded from the start, so it takes seconds on a long recording.
+ * Mean luma of the area the headline will cover, measured on the same picture one sixth of its size: brighter than the
+ * threshold and the letters need a dark backing to stay readable.
+ */
+async function areaLuma(ctx: JobContext, config: Config, fc: FrameContext, request: FrameRequest, box: Rect, name: string): Promise<number | null> {
+  const small = PREVIEW_CANVAS[request.kind];
+  const plan = await planFrame(fc, { ...request, canvas: small });
+  if (!plan) return null;
+  const ratio = small.width / request.canvas.width;
+  const x = Math.min(evenDown(box.x * ratio), small.width - 2);
+  const y = Math.min(evenDown(box.y * ratio), small.height - 2);
+  const w = Math.max(2, Math.min(small.width - x, evenDown(box.w * ratio)));
+  const h = Math.max(2, Math.min(small.height - y, evenDown(box.h * ratio)));
+  const dump = path.join(fc.dir, "tmp", `${name}-block.txt`);
+  try {
+    const graph = `${plan.graph};\n${plan.label}crop=${w}:${h}:${x}:${y},signalstats,metadata=mode=print:file=${escapePath(dump)}[blk]`;
+    await withGraphFile(fc.dir, `${name}-measure.txt`, graph, (script) => ffmpeg(ctx, { ffmpegPath: config.ffmpegPath, threads: ctx.threads }, [...plan.inputs, "-filter_complex_script", script, "-map", "[blk]", "-frames:v", "1", "-f", "null", "-"]));
+    return parseSignalStats(await readFile(dump, "utf8").catch(() => "")).YAVG ?? null;
+  } finally {
+    await rm(dump, { force: true });
+  }
+}
+
+/**
+ * The filters that draw a headline: an optional dark translucent backing, then one `drawtext` per line (the bundled bold
+ * face, the colour preset, a thick black outline and a soft shadow), lines centred in the block and set on a common baseline.
+ * The text of each line goes through a file, so no character of it can break the filter syntax.
+ */
+async function headlineFilters(layout: OverlayLayout, color: ThumbnailColor, backing: boolean, dir: string, name: string, files: string[]): Promise<string[]> {
+  const { box, fontSize } = layout;
+  const parts: string[] = [];
+  if (backing) parts.push(`drawbox=x=${box.x}:y=${box.y}:w=${box.w}:h=${box.h}:color=${BACKING}:t=fill`);
+  const step = fontSize * LINE_HEIGHT_EM;
+  const cap = fontSize * CAP_HEIGHT_EM;
+  const top = box.y + (box.h - ((layout.lines.length - 1) * step + cap)) / 2;
+  const outline = Math.max(2, Math.round(fontSize * OUTLINE_EM));
+  const shadow = Math.max(1, Math.round(fontSize * SHADOW_EM));
+  for (const [index, line] of layout.lines.entries()) {
+    const file = path.join(dir, "tmp", `${name}-line${index}.txt`);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, line);
+    files.push(file);
+    const baseline = Math.round(top + cap + index * step);
+    parts.push(
+      `drawtext=fontfile=${escapePath(path.join(FONTS_DIR, FONT))}:textfile=${escapePath(file)}:expansion=none:fontsize=${fontSize}:fontcolor=0x${THUMBNAIL_COLOR_HEX[color]}` +
+        `:borderw=${outline}:bordercolor=black:shadowx=${shadow}:shadowy=${shadow}:shadowcolor=black@0.6:x=${Math.round(box.x + box.w / 2)}-text_w/2:y=${baseline}-ascent`,
+    );
+  }
+  return parts;
+}
+
+/**
+ * Thumbnail: one frame of the recording as a JPEG at full size (3840x2160, or 2160x3840 for a Short): the speaker's face
+ * zoomed and placed opposite the headline, with a mild punch, and the headline in heavy capitals with a thick outline in
+ * the left or right third (the top of a Short), on a dark backing when the area under it is bright. Made from the recording
+ * by ffmpeg on the server alone.
  */
 export function thumbnailHandler(deps: { config: Config; store: ProjectStore }) {
   return async (ctx: JobContext, job: JobRecord): Promise<Record<string, unknown>> => {
     const kind: ThumbnailKind = job.params.kind === "short" ? "short" : "video";
     const spec = thumbnailSpec(kind);
     const canvas = { width: spec.width, height: spec.height };
-    const project = await deps.store.require(job.sid);
-    const dir = deps.store.dir(job.sid);
-    const at = Number(job.params.atMs);
-    if (!Number.isFinite(at) || at < 0 || at > project.durationMs) throw new Error("atMs is outside the recording");
-    const text = typeof job.params.text === "string" ? job.params.text.trim().slice(0, 140) : "";
+    const atMs = Number(job.params.atMs);
+    const fc = await frameContext(deps.store, job.sid);
+    const { dir } = fc;
+    if (!Number.isFinite(atMs) || atMs < 0 || atMs > fc.project.durationMs) throw new Error("atMs is outside the recording");
+    const style = parseThumbnailStyle(job.params);
+    const side: ThumbnailSide = style.side ?? defaultTextSide();
+    const request: FrameRequest = { atMs, kind, canvas, side };
+    const plan = await planFrame(fc, request);
+    if (!plan) throw new Error("no picture source at that moment");
 
-    const scenes = await resolveScenes(project, dir, (await readScenes(dir)).plan);
-    const scene = sceneAt(scenes, at) ?? scenes[0];
-    if (!scene) throw new Error("this project has no video");
-    const sources = layoutSources(project);
-    const used = project.sources.filter((source) => source.hasVideo && scene.sources.includes(source.id) && sources.some((item) => item.id === source.id));
-    const t0 = Math.max(0, at - LEAD_MS);
-    const frame = frameMs(FPS);
-    const rel = Math.round((at - t0) / frame) * frame;
-    const inputs: string[] = [];
-    const args: string[] = [];
-    const videoInputs: { source: ProjectSource; input: number }[] = [];
-    for (const source of used) {
-      // seek the original to the instant t0 and describe it as a source whose timeline starts there
-      const media = Math.max(0, ((t0 - source.offsetMs) / 1000) * source.rate);
-      const offset = Math.max(0, source.offsetMs - t0);
-      const file = await deps.store.localSource(job.sid, source.sourceKey, source.id);
-      inputs.push(file);
-      args.push("-ss", media.toFixed(3), "-i", file);
-      videoInputs.push({ source: { ...source, offsetMs: offset }, input: inputs.length - 1 });
-    }
-    const cards = cardsOf(project).filter((card) => scene.sources.includes(card.id)).map((card) => ({ id: card.id, name: card.name }));
-    if (videoInputs.length === 0 && cards.length === 0) throw new Error("no picture source at that moment");
-    const aspectScene = { s: 0, e: frame, layout: scene.layout, sources: scene.sources, ...(scene.fit ? { fit: scene.fit } : {}) };
-    const saved = await readScenes(dir);
-    const background = saved.rev === 0 && kind === "short" ? ({ kind: "blur", sigma: 40 } as const) : saved.background;
-    const video = layoutVideoGraph({ inputs: videoInputs, cards, canvas, fps: FPS, scenes: [aspectScene], kept: [{ s: rel, e: rel + frame }], totalMs: rel + 2000, background });
-    let graph = video.graph;
-    let label = video.label;
+    let graph = plan.graph;
+    let label = plan.label;
     const cleanup: string[] = [];
-    if (text) {
-      const layout = overlayTextLayout(text, canvas);
-      const pad = Math.round(layout.fontSize * 0.3);
-      const parts = [`drawbox=x=${layout.box.x}:y=${layout.box.y}:w=${layout.box.w}:h=${layout.box.h}:color=black@0.62:t=fill`];
-      for (let i = 0; i < layout.lines.length; i++) {
-        const file = path.join(dir, "tmp", `${job.id}-line${i}.txt`);
-        await mkdir(path.dirname(file), { recursive: true });
-        await writeFile(file, layout.lines[i] as string);
-        cleanup.push(file);
-        parts.push(`drawtext=fontfile=${escapePath(path.join(FONTS_DIR, "NotoSans-Bold.ttf"))}:textfile=${escapePath(file)}:fontsize=${layout.fontSize}:fontcolor=white:x=${layout.box.x + pad}:y=${Math.round(layout.box.y + pad + i * layout.fontSize * 1.15)}`);
-      }
-      graph += `;\n${label}${parts.join(",")}[vtxt]`;
-      label = "[vtxt]";
-    }
-    const script = path.join(dir, "tmp", `${job.id}-thumb.txt`);
-    await mkdir(path.dirname(script), { recursive: true });
-    await writeFile(script, graph);
-    cleanup.push(script);
-    const outDir = path.join(dir, "exports", job.id);
-    await mkdir(outDir, { recursive: true });
-    const out = path.join(outDir, `thumbnail-${kind}.jpg`);
-    ctx.progress(0.1, "frame");
     try {
-      await ffmpeg(ctx, { ffmpegPath: deps.config.ffmpegPath, threads: ctx.threads, expectedSec: 1, onProgress: () => undefined }, [...args, "-filter_complex_script", script, "-map", label, "-frames:v", "1", "-q:v", "2", "-update", "1", out]);
+      if (style.text !== "") {
+        const placement: OverlayPlacement = kind === "short" ? "top" : side;
+        const layout = overlayTextLayout(style.text.toUpperCase(), canvas, placement);
+        const luma = await areaLuma(ctx, deps.config, fc, request, layout.box, job.id);
+        const filters = await headlineFilters(layout, style.color, luma !== null && textBackingNeeded(luma), dir, job.id, cleanup);
+        graph += `;\n${label}${filters.join(",")}[vtxt]`;
+        label = "[vtxt]";
+      }
+      const outDir = path.join(dir, "exports", job.id);
+      await mkdir(outDir, { recursive: true });
+      const out = path.join(outDir, `thumbnail-${kind}.jpg`);
+      ctx.progress(0.5, "frame");
+      await withGraphFile(dir, `${job.id}-thumb.txt`, graph, (script) =>
+        ffmpeg(ctx, { ffmpegPath: deps.config.ffmpegPath, threads: ctx.threads }, [...plan.inputs, "-filter_complex_script", script, "-map", label, "-frames:v", "1", "-q:v", "2", "-update", "1", out]),
+      );
+      const info = await stat(out);
+      if (info.size > spec.maxBytes) throw new Error("the thumbnail is larger than the allowed size");
+      const file = path.join("exports", job.id, `thumbnail-${kind}.jpg`);
+      await addExport(dir, { id: job.id, preset: `thumbnail-${kind}`, file, bytes: info.size, durationMs: 0, createdAtMs: Date.now(), loudnessLufs: null, edlRev: 0 });
+      return { file, bytes: info.size, width: spec.width, height: spec.height, text: style.text, color: style.color, side };
     } finally {
       for (const file of cleanup) await rm(file, { force: true });
     }
-    const info = await stat(out);
-    if (info.size > spec.maxBytes) throw new Error("the thumbnail is larger than the allowed size");
-    await addExport(dir, { id: job.id, preset: `thumbnail-${kind}`, file: path.join("exports", job.id, `thumbnail-${kind}.jpg`), bytes: info.size, durationMs: 0, createdAtMs: Date.now(), loudnessLufs: null, edlRev: 0 });
-    return { file: path.join("exports", job.id, `thumbnail-${kind}.jpg`), bytes: info.size, width: spec.width, height: spec.height };
   };
 }
