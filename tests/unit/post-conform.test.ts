@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -172,6 +172,20 @@ describe.runIf(hasFfmpeg())("conform of a synthetic session (known offsets, drif
     }
     expect(project.mixProxy).toBe("proxies/mix.m4a");
   });
+
+  it("makes the preview mix again when it was made from other tracks than the project has now", async () => {
+    const dir = path.join(server.dir, "post", SID, "proxies");
+    const before = (await stat(path.join(dir, "mix.m4a"))).mtimeMs;
+    const signature = await readFile(path.join(dir, "mix.sources"), "utf8");
+    expect(signature.split("\n")).toHaveLength(project.sources.filter((source) => source.audio).length);
+    // a mix of the right length made before a late track arrived: its signature lists fewer tracks
+    await writeFile(path.join(dir, "mix.sources"), signature.split("\n").slice(1).join("\n"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect((await api(server, "POST", `/api/sessions/${SID}/project/jobs`, { token, json: { kind: "conform" } })).status).toBe(202);
+    await server.app.post.idle();
+    expect((await stat(path.join(dir, "mix.m4a"))).mtimeMs).toBeGreaterThan(before);
+    expect(await readFile(path.join(dir, "mix.sources"), "utf8")).toBe(signature);
+  }, 120_000);
 
   it("serves a proxy with byte ranges for the browser", async () => {
     const response = await fetch(`${server.base}/api/sessions/${SID}/project/media/proxies/mix.m4a?token=${encodeURIComponent(token)}`, { headers: { range: "bytes=0-99" } });

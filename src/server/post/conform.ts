@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { CONFORM_SAMPLE_RATE, LEVEL_FLOOR_DB, LEVEL_FRAME_MS, PEAKS_PER_SECOND, PROXY_HEIGHT, frameMs, type JobRecord, type ProjectFile, type ProjectSource } from "../../shared/project.js";
@@ -306,6 +306,11 @@ async function buildMix(ctx: JobContext, deps: ConformDeps, project: ProjectFile
   const absolute = path.join(dir, file);
   const projectSec = project.durationMs / 1000;
   const tolerance = 1 / project.fps + MIX_ENCODER_DELAY_SEC;
+  // the mix is kept only when it was made from exactly these tracks: a file made before a late track arrived has the right length and
+  // would otherwise be kept, so the participant of that track is missing from the preview
+  const signatureFile = path.join(dir, "proxies", "mix.sources");
+  const signature = inputs.map((source) => source.audio?.file ?? "").sort().join("\n");
+  if ((await readFile(signatureFile, "utf8").catch(() => null)) !== signature) await rm(absolute, { force: true });
   if (!(await keepExisting(absolute, () => durationOf(deps.config.ffprobePath, absolute), projectSec, tolerance))) {
     await mkdir(path.dirname(absolute), { recursive: true });
     const temp = path.join(dir, "proxies", "mix.part.m4a");
@@ -317,6 +322,7 @@ async function buildMix(ctx: JobContext, deps: ConformDeps, project: ProjectFile
       ...args, "-filter_complex", filter, "-map", "[out]", "-ac", "1", "-c:a", "aac", "-b:a", "96k", "-threads", String(ctx.threads), "-movflags", "+faststart", "-f", "mp4", temp,
     ]);
     await rename(temp, absolute);
+    await writeFile(signatureFile, signature);
   }
   await deps.store.update(project.id, (draft) => {
     draft.mixProxy = file;
