@@ -141,45 +141,57 @@ describe("thumbnails", () => {
     expect(thumbnailCandidates({ durationMs: 0, highlights: [], words: [] })).toEqual([]);
   });
 
+  const LIMITS = { left: { lines: 5, width: 0.36, height: 0.7 }, right: { lines: 5, width: 0.36, height: 0.7 }, top: { lines: 3, width: 1, height: 0.3 } } as const;
   for (const kind of ["video", "short"] as const) {
-    describe(`text overlay on a ${kind} thumbnail`, () => {
-      const spec = thumbnailSpec(kind);
-      const safe = safeArea(spec);
+    for (const placement of ["left", "right", "top"] as const) {
+      describe(`headline at the ${placement} of a ${kind} thumbnail`, () => {
+        const spec = thumbnailSpec(kind);
+        const safe = safeArea(spec);
+        const limits = LIMITS[placement];
 
-      it("fits short and long texts inside the safe area, wrapped in at most four lines", () => {
-        let previous = Infinity;
-        for (const text of ["Wow", "Why it failed", "Why did the first version fail so badly in production", "Dlaczego pierwsza wersja zawiodła tak bardzo w produkcji i co z tego wynika dla całego zespołu", "word ".repeat(80)]) {
-          const layout = overlayTextLayout(text.trim(), spec);
-          expect(insideRect(layout.box, safe), text).toBe(true);
-          expect(layout.lines.length).toBeGreaterThanOrEqual(1);
-          expect(layout.lines.length).toBeLessThanOrEqual(4);
-          expect(layout.box.h).toBeLessThanOrEqual(safe.h / 2);
-          expect(layout.fontSize).toBeLessThanOrEqual(previous);
-          previous = layout.fontSize;
-        }
-      });
+        it("fits short and long texts inside the safe area and the limits of its place, smaller the longer it is", () => {
+          let previous = Infinity;
+          for (const text of ["WOW", "WHY IT FAILED", "WHY THE TOMATOES DRY OUT", "WHY DID THE FIRST VERSION FAIL SO BADLY IN PRODUCTION", "DLACZEGO PIERWSZA WERSJA ZAWIODŁA TAK BARDZO W PRODUKCJI I CO Z TEGO WYNIKA DLA CAŁEGO ZESPOŁU", "WORD ".repeat(80)]) {
+            const layout = overlayTextLayout(text.trim(), spec, placement);
+            expect(insideRect(layout.box, safe), text).toBe(true);
+            expect(layout.lines.length).toBeGreaterThanOrEqual(1);
+            expect(layout.lines.length).toBeLessThanOrEqual(limits.lines);
+            expect(layout.box.w, text).toBeLessThanOrEqual(Math.round(spec.width * limits.width));
+            expect(layout.box.h, text).toBeLessThanOrEqual(Math.floor(safe.h * limits.height));
+            expect(layout.fontSize).toBeLessThanOrEqual(previous);
+            previous = layout.fontSize;
+          }
+        });
 
-      it("keeps every word of a text that fits and ends a text that does not with an ellipsis", () => {
-        const fits = overlayTextLayout("Why did it fail", spec);
-        expect(fits.lines.join(" ")).toBe("Why did it fail");
-        const long = overlayTextLayout("word ".repeat(80).trim(), spec);
-        expect(long.lines.join(" ").endsWith("…")).toBe(true);
-        expect(long.fontSize).toBeGreaterThan(0);
-      });
+        it("keeps every word of a text that fits and ends a text that does not with an ellipsis", () => {
+          const fits = overlayTextLayout("WHY DID IT FAIL", spec, placement);
+          expect(fits.lines.join(" ")).toBe("WHY DID IT FAIL");
+          const long = overlayTextLayout("WORD ".repeat(80).trim(), spec, placement);
+          expect(long.lines.join(" ").endsWith("…")).toBe(true);
+          expect(long.fontSize).toBeGreaterThan(0);
+        });
 
-      it("centres the plate and copes with one huge word and with nothing", () => {
-        const layout = overlayTextLayout("Short title", spec);
-        expect(Math.abs(layout.box.x + layout.box.w / 2 - (safe.x + safe.w / 2))).toBeLessThanOrEqual(1);
-        expect(Math.abs(layout.box.y + layout.box.h / 2 - (safe.y + safe.h / 2))).toBeLessThanOrEqual(1);
-        const huge = overlayTextLayout("Supercalifragilisticexpialidocious".repeat(8), spec);
-        expect(insideRect(huge.box, safe)).toBe(true);
-        expect(overlayTextLayout("", spec).lines).toEqual([]);
+        it("sits flush with its edge of the safe area, centred across it, and copes with one huge word and with nothing", () => {
+          const layout = overlayTextLayout("SHORT TITLE", spec, placement);
+          const centre = { x: layout.box.x + layout.box.w / 2, y: layout.box.y + layout.box.h / 2 };
+          if (placement === "left") expect(layout.box.x).toBe(safe.x);
+          if (placement === "right") expect(layout.box.x + layout.box.w).toBe(safe.x + safe.w);
+          if (placement === "top") {
+            expect(layout.box.y).toBe(safe.y);
+            expect(Math.abs(centre.x - (safe.x + safe.w / 2))).toBeLessThanOrEqual(1);
+          } else {
+            expect(Math.abs(centre.y - (safe.y + safe.h / 2))).toBeLessThanOrEqual(1);
+          }
+          const huge = overlayTextLayout("SUPERCALIFRAGILISTICEXPIALIDOCIOUS".repeat(8), spec, placement);
+          expect(insideRect(huge.box, safe)).toBe(true);
+          expect(overlayTextLayout("", spec, placement).lines).toEqual([]);
+        });
       });
-    });
+    }
   }
 
   it("terminates on a canvas too small for any text", () => {
-    const layout = overlayTextLayout("Some text here", { width: 40, height: 40 });
+    const layout = overlayTextLayout("SOME TEXT HERE", { width: 40, height: 40 }, "left");
     expect(layout.lines.length).toBeGreaterThanOrEqual(1);
   });
 });

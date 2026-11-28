@@ -167,6 +167,23 @@ Jobs run in a small persistent queue (`POST_DIR/<id>/jobs/*.json`). A job surviv
 refuse to start below `POST_MIN_FREE_GB` of free disk. Proxies and intermediates can be deleted per session from the
 project page.
 
+### The project page
+
+The page is a workspace in five steps. The transcript is a column of its own beside every step, sticky and scrolling by
+itself (so playback follows the current word inside the column and never moves the page); under 1000 px of width it sits
+under the step.
+
+1. **Prepare**: one button (and the language of the conversation) runs the conform job and then the transcript, one after
+   the other, with a progress bar. Nothing else is needed before the episode can be played.
+2. **Episode**: the picture that cuts to whoever is speaking, **Play the preview**, **Export video** (or audio) and the list
+   of exports. The scenes and layout and the settings of the export are in folded sections.
+3. **Shorts**: clip suggestions, each with a **Preview in 9:16** on the player, then saving and rendering.
+4. **Cover and text**: chapters, a title and description draft, and thumbnails.
+5. **Details**: the tracks with their offsets and clock differences, the working files (prepare again, delete) and the
+   one-time link for another browser.
+
+Each tab shows whether its step is done, in progress or still to do. The step that was open last is remembered per browser tab.
+
 ### Transcript and highlights
 
 **Transcribe** runs a local speech-to-text job (no cloud). Each track is searched for speech first (energy on the level
@@ -182,6 +199,13 @@ pinned with `ASR_MODEL` is never replaced. `base` is fast and small but noticeab
 the louder one. The language is detected per project or set by hand. The transcript is searchable, click-to-seek, and
 exports as SRT, VTT or plain text (with or without speaker names). Pressing **M** (or the button) while recording drops
 a highlight marker into every active recording; the markers show up as chips above the transcript.
+
+While the episode plays the transcript column follows the current word and keeps it in the upper third. Scrolling the column
+yourself (wheel, touch, keys or its scroll bar) stops the following and shows **Follow playback**; the button, a seek on
+the timeline or pressing play after a pause of two seconds or more resumes it. Clicking a word never moves the text under
+the pointer. A clip's **Preview in 9:16** plays that stretch on the player in the vertical frame (the saved layout is not
+changed) and stops at its end; the layout preview warms up the pictures of the scenes that start within the next two
+seconds, so a cut lands on a frame that is ready.
 
 Measured on this build's 10-minute test conversations (read speech, two speakers, 12 vCPU, no GPU): word error rate 5.0 %
 English and 7.0 % Polish; about 0.15-0.4x real time; 1.7 GB of memory. Word starts land within 100 ms of the reference
@@ -209,14 +233,14 @@ conformed tracks and normalised in two passes to `LOUDNESS_LUFS` (default -16) w
 `TRUE_PEAK_DBTP` (default -1); video is taken from the original recording, conformed at full size, and cut at the same
 frames. Progress is shown, a running export can be cancelled (the ffmpeg process is stopped), and finished exports are
 listed with download and delete. With `POST_RETENTION=keep-exports` (default) the proxies are deleted after an export;
-open **Prepare** again to edit further. `POST_THREADS` bounds the encoder threads.
+use **Prepare the recordings** on the Episode step to edit further. `POST_THREADS` bounds the encoder threads.
 
-On the project page the **Export** section lists the formats (video and audio groups) and shows the server's loudness
+On the Episode step the **Export settings** fold lists the formats (video and audio groups) and shows the server's loudness
 target and true-peak limit under *Advanced*, where one camera can also be chosen instead of the layout's scenes. A bar
 shows the stage (loudness measurement, then encode) and **Cancel** stops the render. Finished exports are listed with
 size, length, measured loudness and a download link. After an export with the default retention the page says that the
 preview media were removed: the transcript, the cuts, the layout and the list of exports stay, the cuts can still be
-edited and undone, and **Prepare** brings playback back without losing the undo history.
+edited and undone, and **Prepare the recordings** brings playback back without losing the undo history.
 
 ### Layouts and vertical video
 
@@ -232,15 +256,15 @@ off) is a speaker like any other: their voice drives the switching and the scene
 picture is a **name card** (a round avatar with the initials, the name under it) that the preview draws and the render
 generates at the size of its tile, so it needs no video; their microphone is mixed into the program like every track.
 
-On the project page the **Layout** section drives a live preview above the player. It draws the layout engine's own
+On the Episode step the **Change the picture** fold (the layout controls) drives the live preview in the player at the top of the page. It draws the layout engine's own
 geometry (the same percentages the render derives its crops from) with the 480p proxies and keeps every picture in step
 with the audio, frame exact while paused. Buttons pick the layout and the shape; how pictures fill their tile (automatic,
 fill or whole picture), the background (a colour, or a blurred copy of the featured picture with a strength slider), the
 rhythm, the shortest scene, what to show while nobody speaks and "Do not feature the screen" (cameras only, for projects with
 a screen track; it is saved in the plan and can be undone) are saved like the cuts. The scene list shows each scene
-with its layout and featured picture, marks the scenes changed by hand and resets them one at a time; the strip above the
-transcript marks the scene boundaries. The layout has its own undo and redo (`Ctrl/Cmd+Z` while the focus is inside the
-Layout section; elsewhere the same keys undo cuts). When the proxies have been removed the preview says so and the layout
+with its layout and featured picture, marks the scenes changed by hand and resets them one at a time; the strip under the
+player marks the scene boundaries. The layout has its own undo and redo (`Ctrl/Cmd+Z` while the focus is inside the
+layout controls; elsewhere the same keys undo cuts). When the proxies have been removed the preview says so and the layout
 stays editable. `/project/<id>?hooks=1` exposes `window.__syncPreview.seekMs(ms)` for `scripts/bench-preview-ssim.ts`,
 which compares preview frames with the exported video (SSIM, gate 0.98 per frame).
 
@@ -268,7 +292,7 @@ energy and pace, and the moments marked with M; each suggestion says why it was 
 own range and preset (vertical 1080x1920 by default); its start and end can be adjusted word by word and it is exported
 with the same renderer, captions included. **Publish** drafts chapters (checked against YouTube's rules: the first at
 00:00, at least three, ascending, at least ten seconds apart), three title variants and a description from the transcript,
-and picks thumbnail frames (3840x2160, or 2160x3840 for a Short, under 50 MB) with an optional text plate. All of it works
+and makes thumbnails (3840x2160, or 2160x3840 for a Short, under 50 MB; see [Thumbnails](#thumbnails)). All of it works
 without a language model; the optional one is described under [Optional language model](#optional-language-model).
 
 On the project page the **Clips** panel lists the suggestions with their reasons and a text excerpt; play a range, move its
@@ -276,19 +300,49 @@ start or end one word at a time, save it, then render the saved clip (vertical 1
 find the file in the exports list. The **Export** panel gains burned-in captions in four styles (with captions on, .srt and
 .vtt files are also written next to a video) and audio cleanup (level the speakers, reduce bleed between microphones, reduce
 background noise); every option is off by default, and the noise model is downloaded only when you ask for it. The
-**Publish** panel shows the chapters with YouTube's rules checked and a copy button, the title and description draft, and a
-thumbnail picker (moment, video or Short shape, optional text) that ends with a picture you can download. The "language model"
+**Publish** panel shows the chapters with YouTube's rules checked and a copy button, the title and description draft, and the
+thumbnails (a strip of ranked frames, a headline with ideas, then a picture you can download). The "language model"
 boxes of Clips and Publish, and the scene-plan box of the layout editor, are ticked by default when a model is configured (`LLM_URL`, or `LLM_PROVIDER=anthropic` with a key) and do nothing without one; untick a box to use the built-in rules for that request.
+
+### Thumbnails
+
+Everything is made on the server from the recording with ffmpeg; no picture is sent to a model or anywhere else. The Cover
+and text step goes through three things:
+
+1. **Frames.** A job (`thumbnail-previews`) renders up to twelve 640x360 JPEG candidates (360x640 for a Short) from the
+   moments the transcript and the loudness point to (markers, starts of the best clips, the loudest stretches, the middles
+   of the sentences that say the most), each in the middle of a spoken word and showing the camera of whoever speaks. They are
+   scored by what ffmpeg can measure, without face detection: brightness near mid grey, contrast (10th to 90th percentile of
+   luma), colour (saturation) and sharpness (share of edge pixels, judged against the other candidates). Dark, over-bright,
+   flat and blurry frames are labelled and come last; at least three are always offered. Open eyes and the expression are
+   what ffmpeg cannot see, so the page says so, and **Show frames just before and after this one** renders the frames 0.4 and
+   0.8 s either side of the picked one (a blink is over by then). The pictures live in `thumbs/<jobId>/` of the project; the
+   newest 24 jobs are kept.
+2. **Headline.** At most five words. The ideas come from the words spoken at the frame: the first complete clause of the
+   sentence, keyword headlines (English and Polish), generic ones for a recording without speech; none repeats the title. With a
+   language model configured and the box ticked, one text-only request (the sentences around the frame and the title) returns
+   three hooks; they are checked (five words, no title repeat, no duplicates) and the built-in ones fill the gaps. The letters
+   are white or yellow. The headline takes the third opposite the speaker, left or right as you choose, and the top of a Short; the page
+   shows it on the chosen frame the way the server will place it.
+3. **Picture.** `POST /api/sessions/<id>/project/jobs` with `{"kind":"thumbnail","params":{"atMs":…,"kind":"video","text":"…","color":"white","side":"left"}}`
+   renders 3840x2160 (2160x3840 for a Short) from the original recording: the speaker's camera alone, enlarged 1.25 times with the face
+   placed opposite the text (a Short is not enlarged), a little contrast, saturation and sharpening, a soft vignette, then the
+   headline in bold Noto Sans with an outline, at the largest size that fits its third of the picture. A dark translucent plate
+   goes behind the text only when the picture under it is bright (mean luma above 110).
+
+Routes of this step: `POST .../project/thumbnail/previews` (`{kind, around?}`, queues the frames job and answers 202 with it) and
+`POST .../project/thumbnail/hooks` (`{atMs, title?, llm?}`, answers `{hooks, sentence, title, llmUsed, llmAvailable, llmFailure}`);
+the former `GET .../project/thumbnails` is gone.
 
 ### Optional language model
 
 Off unless a model is configured: `LLM_URL` is set, or `LLM_PROVIDER=anthropic` with a key. It is then used only for the
-request whose box is ticked (all boxes start ticked; an API request that omits `llm` uses the model too, `llm: false` opts out). Four things use it, each with a built-in fallback: **cutting the clips** (the shorts agent,
-below), retitling the chapters (start times and count never change), the title and description draft, and a
-**scene-plan suggestion** (layout per stretch of the recording). Any failure (refused, timeout, overload, an answer that
+request whose box is ticked (all boxes start ticked; an API request that omits `llm` uses the model too, `llm: false` opts out). Five things use it, each with a built-in fallback: **cutting the clips** (the shorts agent,
+below), retitling the chapters (start times and count never change), the title and description draft, the three
+**headline ideas** of a thumbnail, and a **scene-plan suggestion** (layout per stretch of the recording). Any failure (refused, timeout, overload, an answer that
 does not validate) returns the built-in result and a short reason; nothing is retried.
 
-What the model receives: transcript text and timings and, for the scene plan, a few numbers per stretch (speech, overlap and
+What the model receives: transcript text and timings (for the thumbnail headlines only the sentences around the chosen frame and the title) and, for the scene plan, a few numbers per stretch (speech, overlap and
 silence share, loudness, speaker changes, screen share yes/no). Never audio, video or frames. **The transcript text leaves
 this machine whenever the provider is not on it** (`anthropic`, or an `LLM_URL` that is not loopback or the Docker host); the
 boxes say so. Point it only at a service you may send it to.

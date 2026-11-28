@@ -4,6 +4,7 @@ import path from "node:path";
 import { E2E_DATA_DIR, E2E_SECRET } from "../../playwright.config.js";
 import { issueToken } from "../../src/server/tokens.js";
 import { makeSyntheticSession } from "../support/synthetic.js";
+import { openFold, openStep, prepareRecordings } from "../support/project-page.js";
 
 // A take in which the host shared the screen twice (two screen tracks) and had the camera in between: the Layout section
 // features each share in its own stretch, and "Do not feature the screen" removes them from the whole project.
@@ -62,8 +63,9 @@ test("screen shares are featured where they were recorded, and one switch takes 
   await test.step("the screen is featured during each share only", async () => {
     await page.goto(`/project/${SID}`);
     await page.getByTestId("pj-create").click();
-    await page.getByTestId("pj-prepare").click();
-    await expect(page.getByTestId("pj-conform-status")).toHaveAttribute("data-status", "done", { timeout: 120_000 });
+    await prepareRecordings(page);
+    await openStep(page, "episode");
+    await openFold(page, "pj-lay-section");
     await expect(page.getByTestId("pj-layout")).toBeVisible();
     await expect(page.getByTestId("pj-lay-video")).toHaveCount(3); // the camera and the two screens
     await expect.poll(() => layouts(page)).toEqual(["solo", "screen-camera", "solo", "screen-camera", "solo"]);
@@ -79,6 +81,8 @@ test("screen shares are featured where they were recorded, and one switch takes 
     await expect.poll(() => layouts(page), { timeout: 15_000 }).toEqual(["solo"]);
     await saved(page);
     await page.reload();
+    await openStep(page, "episode");
+    await openFold(page, "pj-lay-section");
     await expect(page.getByTestId("pj-lay-screen-off")).toBeChecked();
     await expect.poll(() => layouts(page)).toEqual(["solo"]);
     await page.getByTestId("pj-layout").screenshot({ path: test.info().outputPath("layout-screen-off.png") });

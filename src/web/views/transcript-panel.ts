@@ -2,6 +2,7 @@ import { isRemoved, keepOnly, removeRange, restoreRange, wordSpanRange, type Ran
 import type { JobRecord, ProjectFile } from "../../shared/project.js";
 import { searchWords, type TranscriptFile } from "../../shared/transcript.js";
 import { h } from "../lib/dom.js";
+import { FollowState, followTarget, scrollTopFor, type ScrollBox } from "../lib/follow-scroll.js";
 import { isTyping } from "../lib/keys.js";
 import type { ProjectApi } from "../lib/project-api.js";
 import { formatDuration } from "../lib/storage-math.js";
@@ -12,6 +13,14 @@ import { silencePanel } from "./silence-panel.js";
 import type { Stage } from "./stage.js";
 
 const TURN_GAP_MS = 2500;
+/** Keys with which the user scrolls a focused column. */
+const SCROLL_KEYS = new Set(["PageUp", "PageDown", "ArrowUp", "ArrowDown", "Home", "End"]);
+/** A press this close to the right edge of the column is taken for one on its scrollbar. */
+const SCROLLBAR_ZONE_PX = 18;
+/** The room the "Follow playback" button takes over the bottom of the column. */
+const FOLLOW_BUTTON_ROOM_PX = 16;
+/** A word found by a search is put in the middle of the column. */
+const CENTER = 0.5;
 
 /** Index of the last word that starts at or before `ms` (-1 before the first). */
 export function wordAt(starts: number[], ms: number): number {
@@ -42,14 +51,27 @@ export interface TranscriptPanel {
   dispose: () => void;
 }
 
-/** The transcript as the cutting tool: select words to delete, keep or restore them, search, highlights, silences, preview render, exports. */
+/**
+ * The transcript as the cutting tool, in a column of its own that scrolls by itself (never the page): select words to
+ * delete, keep or restore them, search, highlights, and, folded away, silences, the preview render and the exports.
+ * The column follows the playing word until the user scrolls it; a button and any seek bring the following back.
+ */
 export function transcriptPanel(api: ProjectApi, stg: Stage, project: ProjectFile, transcript: TranscriptFile, hooks: PanelHooks): TranscriptPanel {
   const words = transcript.words;
   const starts = words.map((word) => word.s);
   const duration = stg.durationMs;
   const names = new Map(transcript.speakers.map((speaker) => [speaker.pid, speaker.name]));
   const { edit, audio, tl } = stg;
-  const seek = (ms: number): void => stg.seek(ms);
+  // A seek from a click on the words stays quiet: the word is under the cursor, so the text must not move away from it.
+  let quietSeek = false;
+  const seekFromWord = (ms: number): void => {
+    quietSeek = true;
+    try {
+      stg.seek(ms);
+    } finally {
+      quietSeek = false;
+    }
+  };
 
   // ---- transcript text -------------------------------------------------------------------------------------------
   const spans: HTMLElement[] = [];
@@ -59,8 +81,8 @@ export function transcriptPanel(api: ProjectApi, stg: Stage, project: ProjectFil
   let lastEnd = 0;
   words.forEach((word, index) => {
     if (!turn || word.pid !== lastPid || word.s - lastEnd > TURN_GAP_MS) {
-      const head = h("button", { type: "button", class: "turn-head", onclick: () => seek(word.s) }, `${names.get(word.pid) ?? word.pid} · ${formatDuration(word.s / 1000)}`);
-      turn = h("p", { class: "turn" }, head);
+      const turnHead = h("button", { type: "button", class: "turn-head", onclick: () => seekFromWord(word.s) }, `${names.get(word.pid) ?? word.pid} · ${formatDuration(word.s / 1000)}`);
+      turn = h("p", { class: "turn" }, turnHead);
       body.append(turn);
     }
     const span = h("span", { class: "w", "data-i": index }, word.t);
@@ -70,21 +92,75 @@ export function transcriptPanel(api: ProjectApi, stg: Stage, project: ProjectFil
     lastEnd = word.e;
   });
 
-  // the word being played is marked and followed while playing
+  // ---- following the playing word, inside the column and nowhere else ----------------------------------------------------
+  // The page never scrolls from here: the column's own scrollTop is set, so the user's scrolling of the page is not fought.
+  const follow = new FollowState(performance.now());
+  /** Index of the last word at or before the playhead (-1 before the first). */
+  let nearest = -1;
+  /** The scroll position this panel set last; a scroll event that lands elsewhere came from the user. */
+  let ownTop = 0;
+  const followButton = h("button", { type: "button", class: "btn btn-small btn-primary tr-follow", "data-testid": "pj-tr-follow", hidden: true, onclick: () => resumeFollowing() }, t("prev.tr.follow"));
+  const syncFollowButton = (): void => {
+    followButton.hidden = follow.active || audio.paused;
+  };
+
+  /** Scrolls the column so that word `index` sits where `pick` says (null: leave it). */
+  function scrollWord(index: number, pick: (box: ScrollBox, wordTop: number, wordHeight: number) => number | null): void {
+    const span = spans[index];
+    if (!span || el.clientHeight === 0) return;
+    const column = el.getBoundingClientRect();
+    const rect = span.getBoundingClientRect();
+    const box: ScrollBox = {
+      scrollTop: el.scrollTop,
+      clientHeight: el.clientHeight,
+      scrollHeight: el.scrollHeight,
+      topInset: controls.offsetHeight,
+      bottomInset: followButton.hidden ? 0 : followButton.offsetHeight + FOLLOW_BUTTON_ROOM_PX,
+    };
+    const target = pick(box, rect.top - column.top - el.clientTop + el.scrollTop, rect.height);
+    if (target === null) return;
+    el.scrollTop = target;
+    ownTop = el.scrollTop;
+  }
+  const followWord = (index: number): void => scrollWord(index, followTarget);
+
+  function resumeFollowing(): void {
+    follow.resume();
+    syncFollowButton();
+    followWord(nearest);
+  }
+
+  // the word being played is marked, and followed while the user has not scrolled the column away
   let current = -1;
   const markPlaying = (ms: number): void => {
-    const index = wordAt(starts, ms);
-    const inside = index >= 0 && ms <= (words[index]?.e ?? 0) + 400 ? index : -1;
+    nearest = wordAt(starts, ms);
+    const inside = nearest >= 0 && ms <= (words[nearest]?.e ?? 0) + 400 ? nearest : -1;
     if (inside === current) return;
     spans[current]?.classList.remove("now");
     current = inside;
     const span = spans[current];
-    if (span) {
-      span.classList.add("now");
-      if (!audio.paused) span.scrollIntoView({ block: "nearest" });
-    }
+    if (!span) return;
+    span.classList.add("now");
+    if (follow.active && !audio.paused && dragFrom < 0) followWord(current);
   };
   const stopFollowing = stg.onTick(markPlaying);
+  // a seek anywhere (timeline, scene list, clip) takes the column to the playhead; one from a click on the words leaves it be
+  const stopSeekWatch = stg.onSeek(() => {
+    follow.resume();
+    syncFollowButton();
+    if (!quietSeek) followWord(nearest);
+  });
+  const onPlay = (): void => {
+    follow.played(performance.now());
+    syncFollowButton();
+    if (follow.active) followWord(nearest);
+  };
+  const onPause = (): void => {
+    follow.paused(performance.now());
+    syncFollowButton();
+  };
+  audio.addEventListener("play", onPlay);
+  audio.addEventListener("pause", onPause);
 
   // ---- selection of words ----------------------------------------------------------------------------------------------
   let selFirst = -1;
@@ -148,7 +224,7 @@ export function transcriptPanel(api: ProjectApi, stg: Stage, project: ProjectFil
   const onMouseUp = (): void => {
     if (dragFrom < 0) return;
     dragFrom = -1;
-    if (selFirst >= 0) seek(words[selFirst]?.s ?? 0);
+    if (selFirst >= 0) seekFromWord(words[selFirst]?.s ?? 0);
   };
   window.addEventListener("mouseup", onMouseUp);
 
@@ -203,8 +279,8 @@ export function transcriptPanel(api: ProjectApi, stg: Stage, project: ProjectFil
     if (hits.length === 0) return;
     hitPos = (hitPos + step + hits.length) % hits.length;
     const index = hits[hitPos] as number;
-    spans[index]?.scrollIntoView({ block: "center" });
-    seek(words[index]?.s ?? 0);
+    scrollWord(index, (box, wordTop, wordHeight) => scrollTopFor(box, wordTop, wordHeight, CENTER));
+    seekFromWord(words[index]?.s ?? 0);
     count.textContent = t("pj.tr.hit", { n: hitPos + 1, total: hits.length });
   };
   input.addEventListener("input", () => {
@@ -226,26 +302,70 @@ export function transcriptPanel(api: ProjectApi, stg: Stage, project: ProjectFil
   };
 
   const chips = project.highlights.map((highlight) =>
-    h("button", { type: "button", class: "chip", "data-testid": "pj-highlight", title: highlight.participantName, onclick: () => seek(highlight.atMs) }, formatDuration(highlight.atMs / 1000)),
+    h("button", { type: "button", class: "chip", "data-testid": "pj-highlight", title: highlight.participantName, onclick: () => stg.seek(highlight.atMs) }, formatDuration(highlight.atMs / 1000)),
   );
 
   // ---- parts that live in their own modules ----------------------------------------------------------------------------
   const silences = silencePanel(api, edit, (range) => stg.player.previewCut(range));
   const preview = cutPreview(api, edit, () => hooks.run(() => api.startJob("cut-preview")));
 
+  // the controls stay at the top of the column while the text scrolls under them
+  const controls = h(
+    "div",
+    { class: "tr-head" },
+    h("div", { class: "row editor-toolbar", role: "toolbar", "aria-label": t("pj.ed.title") }, deleteButton, keepButton, restoreButton, selInfo),
+    h(
+      "div",
+      { class: "row tr-search" },
+      input,
+      h("button", { type: "button", class: "btn btn-small", "aria-label": t("pj.tr.prev"), title: t("pj.tr.prev"), onclick: () => gotoHit(-1) }, "↑"),
+      h("button", { type: "button", class: "btn btn-small", "aria-label": t("pj.tr.next"), title: t("pj.tr.next"), onclick: () => gotoHit(1) }, "↓"),
+      count,
+    ),
+  );
+  const tools = h(
+    "details",
+    { class: "tr-tools", "data-testid": "pj-tr-tools" },
+    h("summary", {}, t("prev.tr.tools")),
+    h(
+      "div",
+      { class: "stack" },
+      h("section", { class: "ed-block" }, silences.el),
+      h("section", { class: "ed-block" }, preview.el),
+      h("div", { class: "row" }, h("label", { class: "check" }, withSpeakers, t("pj.tr.speakers")), link("srt"), link("vtt"), link("txt")),
+      h("p", { class: "hint" }, t("pj.tr.meta", { engine: transcript.engine, model: transcript.model, lang: transcript.lang, words: words.length, dropped: transcript.bleedDropped })),
+    ),
+  );
   const el = h(
     "div",
-    { class: "stack" },
-    h("div", { class: "row editor-toolbar", role: "toolbar", "aria-label": t("pj.ed.title") }, deleteButton, keepButton, restoreButton, selInfo),
+    { class: "stack tr-column", role: "region", "aria-label": t("pj.tr.title"), "data-testid": "pj-tr-column" },
+    controls,
     h("p", { class: "hint" }, t("pj.ed.hint")),
-    h("div", { class: "row" }, input, h("button", { type: "button", class: "btn btn-small", "aria-label": t("pj.tr.prev"), title: t("pj.tr.prev"), onclick: () => gotoHit(-1) }, "↑"), h("button", { type: "button", class: "btn btn-small", "aria-label": t("pj.tr.next"), title: t("pj.tr.next"), onclick: () => gotoHit(1) }, "↓"), count),
     chips.length > 0 ? h("div", { class: "row" }, h("span", { class: "hint" }, t("pj.tr.highlights")), ...chips) : null,
+    tools,
     body,
-    h("section", { class: "ed-block" }, silences.el),
-    h("section", { class: "ed-block" }, preview.el),
-    h("div", { class: "row" }, h("label", { class: "check" }, withSpeakers, t("pj.tr.speakers")), link("srt"), link("vtt"), link("txt")),
-    h("p", { class: "hint" }, t("pj.tr.meta", { engine: transcript.engine, model: transcript.model, lang: transcript.lang, words: words.length, dropped: transcript.bleedDropped })),
+    followButton,
   );
+
+  // the user's own scrolling of the column (wheel, touch, keys, scrollbar) switches the following off
+  const userScrolled = (): void => {
+    follow.userScrolled();
+    syncFollowButton();
+  };
+  el.addEventListener("wheel", (event) => {
+    if (!event.ctrlKey) userScrolled();
+  }, { passive: true });
+  el.addEventListener("touchmove", userScrolled, { passive: true });
+  el.addEventListener("keydown", (event) => {
+    if (SCROLL_KEYS.has(event.key) && !isTyping(event.target)) userScrolled();
+  });
+  el.addEventListener("pointerdown", (event) => {
+    if (event.target === el && event.clientX > el.getBoundingClientRect().right - SCROLLBAR_ZONE_PX) userScrolled();
+  });
+  // a scrollbar that draws over the content (macOS) gives no press to see: a scroll that is not ours is the user's
+  el.addEventListener("scroll", () => {
+    if (Math.abs(el.scrollTop - ownTop) > 2) userScrolled();
+  }, { passive: true });
 
   showSelection();
   onEdit();
@@ -258,6 +378,9 @@ export function transcriptPanel(api: ProjectApi, stg: Stage, project: ProjectFil
       window.removeEventListener("mouseup", onMouseUp);
       document.removeEventListener("keydown", onKey);
       stopFollowing();
+      stopSeekWatch();
+      audio.removeEventListener("play", onPlay);
+      audio.removeEventListener("pause", onPause);
       unsubscribe();
       silences.dispose();
       preview.dispose();

@@ -13,6 +13,7 @@ import { captionStyleSelect } from "./caption-style-select.js";
 import { failureBanner, progressBar, stageLabel } from "./job-status.js";
 import { banner } from "./layout.js";
 import { formatSelect } from "./preset-select.js";
+import type { ClipPlayback } from "./stage.js";
 
 const ACTIVE = new Set(["queued", "running"]);
 /** A clip is meant for a vertical feed; a recording without picture gets the audio format instead. */
@@ -25,8 +26,12 @@ const EXCERPT_CHARS = 360;
 export interface ClipsPanelHooks {
   /** Runs a call that changes the project: shows its error and refreshes the page's state. */
   run: (action: () => Promise<unknown>) => Promise<void>;
-  /** Plays a stretch of the recording on the page's player. */
+  /** Previews a stretch of the recording as a short (vertical, as it will be rendered) on the page's player. */
   play: (range: Range) => void;
+  /** Stops the preview that `play` started. */
+  stop?: () => void;
+  /** Reports the preview that plays now (null: none), at once and on every change; returns the way to stop listening. */
+  onPlaying?: (listener: (clip: ClipPlayback | null) => void) => () => void;
 }
 
 export interface ClipsPanel {
@@ -54,6 +59,9 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
   let searching = false;
   let suggested = false;
   let playable = false;
+  /** The preview that plays on the page's player now. */
+  let playing: ClipPlayback | null = null;
+  let stopWatching: (() => void) | null = null;
   let initialised = false;
   let disposed = false;
   let savedSignature = "";
@@ -67,8 +75,79 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
   const suggestionsHost = h("div", { class: "stack", "data-testid": "pj-cl-suggestions" });
   const conflictHost = h("div");
   const savedHost = h("div", { class: "stack", "data-testid": "pj-cl-saved" });
+  /** What a short is and what the preview shows; only for a recording with picture, where the clips become vertical videos. */
+  const explain = h("p", { class: "clip-explain", "data-testid": "pj-cl-explain", hidden: true }, t("prev.cl.explain"));
 
   const hasVideo = (): boolean => state?.project.sources.some((source) => source.hasVideo && source.kind !== "audio") ?? false;
+
+  // ---- previewing a stretch as a short ------------------------------------------------------------------------------------
+  const isPlaying = (range: Range): boolean => playing !== null && playing.range.s === range.s && playing.range.e === range.e;
+
+  function paintPreview(button: HTMLElement): void {
+    const on = isPlaying({ s: Number(button.dataset.previewS), e: Number(button.dataset.previewE) });
+    button.textContent = on ? t("prev.cl.stop") : hasVideo() ? t("prev.cl.preview") : t("pj.cl.play");
+    button.dataset.state = on ? "playing" : "idle";
+  }
+  const paintPreviews = (): void => {
+    for (const button of el.querySelectorAll<HTMLElement>("[data-preview-s]")) paintPreview(button);
+  };
+
+  function startPreview(range: Range): void {
+    hooks.play(range);
+    stopWatching?.();
+    stopWatching =
+      hooks.onPlaying?.((clip) => {
+        playing = clip;
+        paintPreviews();
+      }) ?? null;
+  }
+
+  /** The button that previews a stretch as a short, and stops it while it plays. */
+  function previewButton(testId: string, clip: Range): HTMLButtonElement {
+    // only the two ends go to the page's player, not the card they come from
+    const range: Range = { s: clip.s, e: clip.e };
+    const button = h("button", {
+      type: "button",
+      class: "btn btn-small",
+      "data-testid": testId,
+      "data-preview-s": String(range.s),
+      "data-preview-e": String(range.e),
+      disabled: !playable,
+      title: playable ? undefined : t("pj.cl.noMedia"),
+      onclick: () => (isPlaying(range) ? hooks.stop?.() : startPreview(range)),
+    });
+    paintPreview(button);
+    return button;
+  }
+
+  // ---- rendering a saved clip ---------------------------------------------------------------------------------------------
+  const captionStyleOf = (clip: ClipProject): string => captionChoice.get(clip.id) ?? (state?.project.transcript.status === "done" ? DEFAULT_CAPTIONS : "off");
+
+  function startRender(clip: ClipProject, captionStyle: string): void {
+    const video = presetById(clip.preset)?.kind === "video";
+    void hooks.run(() => api.startJob("render", { preset: clip.preset, ...(video ? { captions: captionStyle === "off" ? false : { style: captionStyle } } : {}), range: { s: clip.s, e: clip.e }, clip: clip.id }));
+  }
+
+  function jobNote(job: JobRecord): string {
+    if (ACTIVE.has(job.status)) return t("pj.cl.progress", { percent: Math.round(job.progress * 100), stage: stageLabel(job.stage) });
+    if (job.status === "done") return t("pj.cl.done");
+    if (job.status === "failed") return t("pj.cl.failed");
+    return job.status === "canceled" ? t("pj.cl.canceled") : "";
+  }
+
+  /** Keeps the render button and the status line of the suggestion cards that were saved in step with the render jobs, without redrawing the cards. */
+  function syncCardRenders(): void {
+    const jobs = state?.jobs ?? [];
+    const rendering = jobs.some((job) => job.kind === "render" && ACTIVE.has(job.status));
+    for (const button of suggestionsHost.querySelectorAll<HTMLButtonElement>('button[data-testid="pj-cl-card-render"]')) {
+      const clip = saved.clips.find((item) => item.id === button.dataset.clip);
+      button.disabled = rendering || (clip !== undefined && presetById(clip.preset)?.kind === "video" && !hasVideo());
+    }
+    for (const line of suggestionsHost.querySelectorAll<HTMLElement>('[data-testid="pj-cl-card-status"]')) {
+      const job = clipJob(jobs, line.dataset.clip ?? "");
+      line.textContent = job ? jobNote(job) : "";
+    }
+  }
 
   function suggest(): void {
     searching = true;
@@ -103,6 +182,7 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
     suggestions[index] = adjustClip(clip, transcript.words, wordStep(clip, transcript.words, edge, steps));
     const next = buildCard(index);
     old.replaceWith(next);
+    syncCardRenders();
     next.querySelector<HTMLElement>(`[data-testid="${focusId}"]`)?.focus();
   }
 
@@ -110,7 +190,7 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
     const clip = suggestions[index] as ClipSuggestion;
     const names = new Map((state?.project.participants ?? []).map((participant) => [participant.id, participant.name]));
     const nameOf = (pid: string): string => names.get(pid) ?? pid;
-    const isSaved = saved.clips.some((item) => item.id === clip.id);
+    const savedClip = saved.clips.find((item) => item.id === clip.id);
     const excerpt = transcript ? clipText(transcript.words, clip, nameOf) : "";
     const step = (testId: string, edge: "s" | "e", steps: number, label: string): HTMLButtonElement => {
       const visible = steps < 0 ? t("pj.cl.wordEarlier") : t("pj.cl.wordLater");
@@ -142,8 +222,12 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
       h(
         "div",
         { class: "row" },
-        h("button", { type: "button", class: "btn btn-small", "data-testid": "pj-cl-play", disabled: !playable, title: playable ? undefined : t("pj.cl.noMedia"), onclick: () => hooks.play({ s: clip.s, e: clip.e }) }, t("pj.cl.play")),
-        h("button", { type: "button", class: "btn btn-small btn-primary", "data-testid": "pj-cl-save", disabled: isSaved, onclick: () => saveSuggestion(clip) }, isSaved ? t("pj.cl.savedOne") : t("pj.cl.save")),
+        previewButton("pj-cl-play", clip),
+        h("button", { type: "button", class: savedClip ? "btn btn-small" : "btn btn-small btn-primary", "data-testid": "pj-cl-save", disabled: savedClip !== undefined, onclick: () => saveSuggestion(clip) }, savedClip ? t("pj.cl.savedOne") : t("pj.cl.save")),
+        savedClip
+          ? h("button", { type: "button", class: "btn btn-small btn-primary", "data-testid": "pj-cl-card-render", "data-clip": savedClip.id, onclick: () => startRender(savedClip, captionStyleOf(savedClip)) }, t("pj.cl.render"))
+          : null,
+        savedClip ? h("span", { class: "hint", "data-testid": "pj-cl-card-status", "data-clip": savedClip.id }) : null,
       ),
     );
     cards[index] = el;
@@ -161,6 +245,7 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
       suggested && !searching && suggestions.length === 0 ? h("p", { class: "hint", "data-testid": "pj-cl-none" }, t("pj.cl.none")) : null,
       ...(searching ? [] : suggestions.map((_, index) => buildCard(index))),
     );
+    syncCardRenders();
   }
 
   /** Saves the clip list on the revision the page knows; a list that changed in another window is loaded instead. */
@@ -197,7 +282,7 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
     preset.value = clip.preset;
     preset.addEventListener("change", () => void hooks.run(() => persist(saved.clips.map((item) => (item.id === clip.id ? { ...item, preset: preset.value } : item)))));
     const captions = captionStyleSelect("pj-cl-captions", t("pj.cl.captions"), t("pj.cl.captions.off"));
-    captions.value = captionChoice.get(clip.id) ?? (transcriptReady ? DEFAULT_CAPTIONS : "off");
+    captions.value = captionStyleOf(clip);
     captions.disabled = !video || !transcriptReady;
     captions.addEventListener("change", () => captionChoice.set(clip.id, captions.value));
 
@@ -225,7 +310,7 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
         { class: "row" },
         h("div", { class: "field" }, h("span", {}, t("pj.cl.preset")), preset),
         h("div", { class: "field" }, h("span", {}, t("pj.cl.captions")), captions),
-        h("button", { type: "button", class: "btn btn-small", "data-testid": "pj-cl-row-play", disabled: !playable, title: playable ? undefined : t("pj.cl.noMedia"), onclick: () => hooks.play({ s: clip.s, e: clip.e }) }, t("pj.cl.play")),
+        previewButton("pj-cl-row-play", clip),
         h(
           "button",
           {
@@ -233,10 +318,7 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
             class: "btn btn-small btn-primary",
             "data-testid": "pj-cl-render",
             disabled: rendering || (video && !hasVideo()),
-            onclick: () => {
-              const style = captions.value;
-              void hooks.run(() => api.startJob("render", { preset: clip.preset, ...(video ? { captions: style === "off" ? false : { style } } : {}), range: { s: clip.s, e: clip.e }, clip: clip.id }));
-            },
+            onclick: () => startRender(clip, captions.value),
           },
           t("pj.cl.render"),
         ),
@@ -298,6 +380,9 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
       playable = canPlay;
       renderSuggestions();
     }
+    explain.hidden = !hasVideo();
+    paintPreviews();
+    syncCardRenders();
     if (signature() !== savedSignature) renderSaved();
   }
 
@@ -307,6 +392,7 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
   const el = h(
     "div",
     { class: "stack", "data-testid": "pj-clips" },
+    explain,
     h("p", { class: "hint" }, t("pj.cl.lead")),
     h("div", { class: "row" }, suggestButton, h("label", { class: "check" }, llmToggle, h("span", {}, t("pj.cl.llm"), llmHint))),
     needTranscript,
@@ -320,6 +406,7 @@ export function clipsPanel(api: ProjectApi, hooks: ClipsPanelHooks): ClipsPanel 
     update,
     dispose() {
       disposed = true;
+      stopWatching?.();
       el.replaceChildren();
     },
   };

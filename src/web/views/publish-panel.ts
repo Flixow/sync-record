@@ -1,19 +1,10 @@
 import { formatChapters, MIN_CHAPTERS, type ChapterIssue } from "../../shared/chapters.js";
-import type { JobRecord } from "../../shared/project.js";
-import type { ThumbnailKind } from "../../shared/publish.js";
 import { copyField } from "../lib/clipboard.js";
 import { h, setChildren } from "../lib/dom.js";
-import type { ChaptersReport, ExportRecord, ProjectApi, ProjectState, PublishDraftReport, ThumbnailCandidates } from "../lib/project-api.js";
-import { formatBytes } from "../lib/storage-math.js";
-import { formatClock } from "../lib/time.js";
+import type { ChaptersReport, ProjectApi, ProjectState, PublishDraftReport } from "../lib/project-api.js";
 import { t } from "../i18n/index.js";
-import { failureBanner, progressBar } from "./job-status.js";
 import { banner } from "./layout.js";
-
-const ACTIVE = new Set(["queued", "running"]);
-const KINDS: ThumbnailKind[] = ["video", "short"];
-/** The server cuts the text on the picture at this length. */
-const OVERLAY_TEXT_MAX = 140;
+import { thumbnailSection } from "./thumbnail-section.js";
 
 export interface PublishPanelHooks {
   /** Runs a call that changes the project or reads from it: shows its error and refreshes the page's state. */
@@ -81,12 +72,11 @@ function copyButton(field: HTMLInputElement | HTMLTextAreaElement, testId: strin
 }
 
 /**
- * Publishing helpers: the chapters of the edited program as YouTube wants them, a draft title and description, and a
- * thumbnail frame with an optional text plate. Everything is made from the transcript; the local language model is only
- * asked when the user ticks the box.
+ * Publishing helpers: the chapters of the edited program as YouTube wants them, a draft title and description, and the
+ * thumbnail (thumbnail-section.ts). Everything is made on the server from the transcript and the recording; the local
+ * language model is only asked when the user ticks the box.
  */
 export function publishPanel(api: ProjectApi, hooks: PublishPanelHooks): PublishPanel {
-  let state: ProjectState | null = null;
   let ready = false;
   let picture = false;
   let chapters: ChaptersReport | null = null;
@@ -94,13 +84,6 @@ export function publishPanel(api: ProjectApi, hooks: PublishPanelHooks): Publish
   let draft: PublishDraftReport | null = null;
   let drafting = false;
   let draftWithModel = false;
-  let kind: ThumbnailKind = "video";
-  let candidates: ThumbnailCandidates | null = null;
-  let candidatesKey = "";
-  let picked: number | null = null;
-  let exports: ExportRecord[] = [];
-  let lastDone = "";
-  let statusSignature = "";
   let initialised = false;
   let disposed = false;
 
@@ -147,7 +130,7 @@ export function publishPanel(api: ProjectApi, hooks: PublishPanelHooks): Publish
         draftWithModel = llmToggle.checked;
         draft = await api.publishDraft(draftWithModel);
         // chapters the model retitled replace the list shown above, so the list and the description agree
-        if (draft.llmUsed && chapters) chapters = { chapters: draft.chapters, validation: draft.validation, text: formatChapters(draft.chapters) };
+        if (draft.llmUsed && chapters) chapters = { chapters: draft.chapters, validation: draft.validation, text: formatChapters(draft.chapters), llmUsed: draft.llmUsed, llmAvailable: draft.llmAvailable };
       } finally {
         drafting = false;
         if (!disposed) {
@@ -191,155 +174,19 @@ export function publishPanel(api: ProjectApi, hooks: PublishPanelHooks): Publish
   }
 
   // thumbnail
-  const noPicture = h("p", { class: "hint", "data-testid": "pj-pub-thumb-nopicture", hidden: true }, t("pj.pub.thumb.noVideo"));
-  const kindButtons = KINDS.map((value) => h("button", { type: "button", class: "btn btn-small toggle", "data-testid": `pj-pub-kind-${value}`, "aria-pressed": String(value === kind), onclick: () => setKind(value) }, t(`pj.pub.thumb.${value}`)));
-  const momentsHost = h("div", { class: "stack", "data-testid": "pj-pub-moments" });
-  const textInput = h("input", { type: "text", maxlength: String(OVERLAY_TEXT_MAX), "data-testid": "pj-pub-thumb-text", "aria-label": t("pj.pub.thumb.text") });
-  const createButton = h(
-    "button",
-    {
-      type: "button",
-      class: "btn btn-primary",
-      "data-testid": "pj-pub-thumb-create",
-      disabled: true,
-      onclick: () => {
-        const atMs = picked;
-        if (atMs !== null) void hooks.run(() => api.startJob("thumbnail", { atMs, kind, text: textInput.value.trim() }));
-      },
-    },
-    t("pj.pub.thumb.create"),
-  );
-  const thumbStatusHost = h("div", { class: "stack", "data-testid": "pj-pub-thumb-status" });
-  const thumbControls = h(
-    "div",
-    { class: "stack" },
-    h("div", { class: "row", role: "group", "aria-label": t("pj.pub.thumb.shape") }, ...kindButtons),
-    momentsHost,
-    h("div", { class: "field" }, h("span", {}, t("pj.pub.thumb.text")), textInput),
-    h("div", { class: "row" }, createButton),
-    thumbStatusHost,
-  );
-
-  function newestThumbnailJob(): JobRecord | undefined {
-    return (state?.jobs ?? []).filter((job) => job.kind === "thumbnail").sort((a, b) => b.createdAtMs - a.createdAtMs)[0];
-  }
-
-  /** What the status area shows, as a string: it is redrawn only when this changes. */
-  function statusKey(): string {
-    const job = newestThumbnailJob();
-    return JSON.stringify([job?.id, job?.status, job ? Math.round(job.progress * 100) : 0, exports.find((item) => item.preset === `thumbnail-${kind}`)?.id, kind]);
-  }
-
-  function syncThumb(): void {
-    const job = newestThumbnailJob();
-    createButton.disabled = picked === null || !picture || (job !== undefined && ACTIVE.has(job.status));
-  }
-
-  function setKind(next: ThumbnailKind): void {
-    kind = next;
-    kindButtons.forEach((button, index) => button.setAttribute("aria-pressed", String(KINDS[index] === kind)));
-    renderStatus();
-    void hooks.run(loadCandidates);
-  }
-
-  async function loadCandidates(): Promise<void> {
-    const key = `${kind}|${state?.project.transcript.atMs ?? 0}`;
-    candidatesKey = key;
-    const result = await api.thumbnails(kind);
-    if (disposed || candidatesKey !== key) return;
-    candidates = result;
-    if (picked === null || !result.candidates.includes(picked)) picked = result.candidates[0] ?? null;
-    renderMoments();
-  }
-
-  function renderMoments(): void {
-    syncThumb();
-    const list = candidates;
-    setChildren(
-      momentsHost,
-      list ? h("p", { class: "hint", "data-testid": "pj-pub-thumb-spec" }, t("pj.pub.thumb.spec", { width: list.spec.width, height: list.spec.height, mb: Math.round(list.spec.maxBytes / (1024 * 1024)) })) : null,
-      list && list.candidates.length === 0 ? h("p", { class: "hint", "data-testid": "pj-pub-thumb-none" }, t("pj.pub.thumb.none")) : null,
-      list && list.candidates.length > 0
-        ? h(
-            "div",
-            { class: "row", role: "group", "aria-label": t("pj.pub.thumb.moments") },
-            ...list.candidates.map((ms) =>
-              h(
-                "button",
-                {
-                  type: "button",
-                  class: "btn btn-small toggle",
-                  "data-testid": "pj-pub-moment",
-                  "data-at": String(ms),
-                  "aria-pressed": String(ms === picked),
-                  onclick: () => {
-                    picked = ms;
-                    renderMoments();
-                  },
-                },
-                formatClock(ms),
-              ),
-            ),
-          )
-        : null,
-    );
-  }
-
-  /** The progress or failure of the newest thumbnail job and the picture of the newest thumbnail of the chosen shape. */
-  function renderStatus(): void {
-    const job = newestThumbnailJob();
-    const active = job !== undefined && ACTIVE.has(job.status);
-    const record = exports.find((item) => item.preset === `thumbnail-${kind}`);
-    statusSignature = statusKey();
-    setChildren(
-      thumbStatusHost,
-      job && active
-        ? h(
-            "div",
-            { class: "stack" },
-            progressBar(Math.round(job.progress * 100), t("pj.pub.thumb"), job.stage),
-            h("p", { class: "hint", "data-testid": "pj-pub-thumb-progress", "data-status": job.status }, t("pj.pub.thumb.progress", { percent: Math.round(job.progress * 100) })),
-          )
-        : null,
-      job?.status === "failed" ? failureBanner("pj.pub.thumb.failed", job.error, "pj-pub-thumb-error") : null,
-      record
-        ? h(
-            "figure",
-            { class: "pub-thumb", "data-testid": "pj-pub-thumb-result", "data-id": record.id },
-            h("img", { src: api.mediaUrl(record.file), alt: t("pj.pub.thumb.alt"), "data-testid": "pj-pub-thumb-img" }),
-            h(
-              "figcaption",
-              { class: "row hint" },
-              h("span", {}, `${t("pj.pub.thumb.latest")} · ${formatBytes(record.bytes)}`),
-              h("a", { class: "btn btn-small", href: api.mediaUrl(record.file), download: record.file.split("/").pop() ?? record.file, "data-testid": "pj-pub-thumb-download" }, t("pj.ex.download")),
-            ),
-          )
-        : null,
-    );
-  }
-
-  async function loadExports(): Promise<void> {
-    const list = await api.exports();
-    if (disposed) return;
-    exports = list;
-    renderStatus();
-  }
+  const thumbnail = thumbnailSection(api, { run: hooks.run, useModel: () => llmToggle.checked, title: () => draft?.draft.titles[0] });
+  llmToggle.addEventListener("change", () => thumbnail.refreshIdeas());
 
   function update(next: ProjectState): void {
-    state = next;
     ready = next.project.transcript.status === "done";
     picture = next.project.sources.some((source) => source.hasVideo && (source.kind === "camera" || source.kind === "screen"));
     needTranscript.hidden = ready;
     refreshButton.disabled = !ready;
     draftButton.disabled = !ready || drafting;
-    noPicture.hidden = picture;
-    thumbControls.hidden = !picture;
     if (!initialised) {
       llmToggle.checked = next.settings.llm;
       llmHint.textContent = t(next.settings.llmRemote ? "pj.pub.llm.hint.remote" : "pj.pub.llm.hint");
       initialised = true;
-      // the list is only needed for the picture of the latest thumbnail; a failed read leaves it empty
-      void loadExports().catch(() => undefined);
     }
     if (ready) {
       const at = String(next.project.transcript.atMs);
@@ -347,22 +194,12 @@ export function publishPanel(api: ProjectApi, hooks: PublishPanelHooks): Publish
         chaptersKey = at;
         void hooks.run(loadChapters);
       }
-      if (picture && candidatesKey !== `${kind}|${at}`) void hooks.run(loadCandidates);
     }
-    syncThumb();
-    // a thumbnail that has just finished: its file is in the list now
-    const finished = next.jobs.filter((job) => job.kind === "thumbnail" && job.status === "done").sort((a, b) => b.createdAtMs - a.createdAtMs)[0];
-    if (finished && finished.id !== lastDone) {
-      lastDone = finished.id;
-      void loadExports().catch(() => undefined);
-    }
-    if (statusKey() !== statusSignature) renderStatus();
+    thumbnail.update(next, ready, picture);
   }
 
   renderChapters();
   renderDraft();
-  renderMoments();
-  renderStatus();
 
   const el = h(
     "div",
@@ -377,7 +214,7 @@ export function publishPanel(api: ProjectApi, hooks: PublishPanelHooks): Publish
       h("div", { class: "row" }, draftButton, h("label", { class: "check" }, llmToggle, h("span", {}, t("pj.pub.llm"), llmHint))),
       draftHost,
     ),
-    h("div", { class: "ex-block", "data-testid": "pj-pub-thumb-block" }, h("h4", {}, t("pj.pub.thumb")), noPicture, thumbControls),
+    thumbnail.el,
   );
 
   return {
@@ -385,6 +222,7 @@ export function publishPanel(api: ProjectApi, hooks: PublishPanelHooks): Publish
     update,
     dispose() {
       disposed = true;
+      thumbnail.dispose();
       el.replaceChildren();
     },
   };

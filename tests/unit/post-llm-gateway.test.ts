@@ -185,7 +185,8 @@ describe.runIf(hasFfmpeg())("project API through a fake gateway", () => {
   });
 
   it("retitles the chapters (times and count unchanged), writes the draft and says the model was used", async () => {
-    const plain = (await api(server, "GET", url("/chapters"), { token })).body as { chapters: { startMs: number; title: string }[] };
+    const plain = (await api(server, "GET", url("/chapters?llm=0"), { token })).body as { chapters: { startMs: number; title: string }[]; llmUsed: boolean };
+    expect(plain.llmUsed).toBe(false);
     const response = await api(server, "POST", url("/publish/draft"), { token, json: { language: "en", llm: true } });
     const body = response.body as { draft: { titles: string[]; description: string }; chapters: { startMs: number; title: string }[]; validation: { ok: boolean }; llmUsed: boolean; llmFailure: string | null };
     expect(body.llmUsed).toBe(true);
@@ -196,6 +197,20 @@ describe.runIf(hasFfmpeg())("project API through a fake gateway", () => {
     expect(body.validation.ok).toBe(true);
     expect(body.draft.description).toContain("Gateway chapter 1");
     expect(body.draft.description).toContain("A summary written by the gateway.");
+  });
+
+  it("titles the chapters list the page shows with the model too, once per distinct list", async () => {
+    const plain = (await api(server, "GET", url("/chapters?llm=0"), { token })).body as { chapters: { startMs: number; title: string }[] };
+    gateway.calls.length = 0;
+    const first = (await api(server, "GET", url("/chapters"), { token })).body as { chapters: { startMs: number; title: string }[]; llmUsed: boolean; text: string };
+    expect(first.llmUsed).toBe(true);
+    expect(first.chapters.map((chapter) => chapter.startMs)).toEqual(plain.chapters.map((chapter) => chapter.startMs));
+    expect(first.chapters.map((chapter) => chapter.title)).toEqual(plain.chapters.map((_, index) => `Gateway chapter ${index + 1}`));
+    expect(first.text).toContain("Gateway chapter 1");
+    const calls = gateway.calls.length;
+    expect(calls).toBeGreaterThan(0);
+    await api(server, "GET", url("/chapters"), { token });
+    expect(gateway.calls.length).toBe(calls);
   });
 
   it("suggests a scene plan: valid layouts become overrides, an invalid one is dropped, a highlight is advisory, the saved plan is untouched", async () => {

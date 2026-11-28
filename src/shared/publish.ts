@@ -229,13 +229,31 @@ export interface OverlayLayout {
   lines: string[];
   /** In pixels of the thumbnail picture. */
   fontSize: number;
-  /** The plate behind the text, padding included; always inside the safe area. */
+  /** The block behind the text, padding included; always inside the safe area. */
   box: Rect;
 }
 
-const LINE_HEIGHT_EM = 1.15;
+/** Where a headline goes: the left or the right third of a video thumbnail, or the top of a Short. */
+export type OverlayPlacement = "left" | "right" | "top";
+
+/** Distance between the baselines of two lines of a headline, in em: tight, as heavy capitals want it. */
+export const LINE_HEIGHT_EM = 1.02;
 const PAD_EM = 0.3;
-const MAX_LINES = 4;
+/** Width of the black stroke around the letters of a headline, in em. */
+export const OUTLINE_EM = 0.09;
+
+interface PlacementRules {
+  /** Widest block, as a share of the picture's width. */
+  width: number;
+  /** Tallest block, as a share of the safe area's height. */
+  height: number;
+  maxLines: number;
+  /** Largest font size, as a share of the picture's short side. */
+  size: number;
+}
+
+const SIDE_RULES: PlacementRules = { width: 0.36, height: 0.7, maxLines: 5, size: 0.2 };
+const PLACEMENT_RULES: Record<OverlayPlacement, PlacementRules> = { left: SIDE_RULES, right: SIDE_RULES, top: { width: 1, height: 0.3, maxLines: 3, size: 0.12 } };
 
 /** Words broken into lines no wider than `maxWidth`, as even as the line count allows; null when one word is wider. */
 function wrapEvenly(words: string[], widthOf: (text: string) => number, maxWidth: number): string[] | null {
@@ -243,9 +261,9 @@ function wrapEvenly(words: string[], widthOf: (text: string) => number, maxWidth
     const lines: string[] = [];
     let line = "";
     for (const word of words) {
+      if (widthOf(word) > limit) return null;
       const candidate = line === "" ? word : `${line} ${word}`;
       if (widthOf(candidate) <= limit) line = candidate;
-      else if (line === "") return null;
       else {
         lines.push(line);
         line = word;
@@ -268,28 +286,34 @@ function wrapEvenly(words: string[], widthOf: (text: string) => number, maxWidth
 }
 
 /**
- * Lines, font size and plate for a text on a thumbnail: the largest bold size (using the advance widths of the bundled font)
- * at which the text wraps into at most four lines and its plate stays inside the safe area of the picture and takes at most
- * half of its height; the plate is centred. A text that cannot fit even at the smallest size is cut after as many words as
- * fit and ends with "…".
+ * Lines, font size and block of a headline on a thumbnail: the largest bold size (using the advance widths of the bundled
+ * font) at which the text wraps into the placement's line limit and its block, padding included, stays inside the safe area
+ * and its width and height limits. A block on the left or right is flush with that edge of the safe area and centred
+ * vertically; at the top it is centred horizontally. A text that cannot fit even at the smallest size is cut after as many
+ * words as fit and ends with "…". `text` is measured as given: pass it in the case it is drawn.
  */
-export function overlayTextLayout(text: string, spec: Canvas): OverlayLayout {
+export function overlayTextLayout(text: string, spec: Canvas, placement: OverlayPlacement): OverlayLayout {
   const safe = safeArea(spec);
+  const rules = PLACEMENT_RULES[placement];
   const shortSide = Math.min(spec.width, spec.height);
   const minSize = Math.max(8, Math.round(shortSide * 0.04));
-  const maxSize = Math.round(shortSide * 0.14);
+  const maxSize = Math.round(shortSide * rules.size);
+  const maxWidth = Math.min(safe.w, Math.round(spec.width * rules.width));
+  const maxHeight = Math.floor(safe.h * rules.height);
   const widthAt = (candidate: string, size: number): number => (textUnits(candidate, true) / 1000) * size;
   const words = text.split(/\s+/).filter((word) => word !== "");
-  if (words.length === 0) return { lines: [], fontSize: minSize, box: { x: safe.x + Math.floor(safe.w / 2), y: safe.y + Math.floor(safe.h / 2), w: 0, h: 0 } };
+  if (words.length === 0) return { lines: [], fontSize: minSize, box: { x: safe.x, y: safe.y, w: 0, h: 0 } };
 
   const place = (parts: string[], size: number): OverlayLayout | null => {
     const pad = Math.ceil(size * PAD_EM);
-    const lines = wrapEvenly(parts, (candidate) => widthAt(candidate, size), safe.w - 2 * pad);
-    if (!lines || lines.length > MAX_LINES) return null;
+    const lines = wrapEvenly(parts, (candidate) => widthAt(candidate, size), maxWidth - 2 * pad);
+    if (!lines || lines.length > rules.maxLines) return null;
     const height = Math.ceil(lines.length * size * LINE_HEIGHT_EM) + 2 * pad;
-    if (height > safe.h / 2) return null;
+    if (height > maxHeight) return null;
     const width = Math.ceil(Math.max(...lines.map((line) => widthAt(line, size)))) + 2 * pad;
-    return { lines, fontSize: size, box: { x: safe.x + Math.floor((safe.w - width) / 2), y: safe.y + Math.floor((safe.h - height) / 2), w: width, h: height } };
+    const x = placement === "left" ? safe.x : placement === "right" ? safe.x + safe.w - width : safe.x + Math.floor((safe.w - width) / 2);
+    const y = placement === "top" ? safe.y : safe.y + Math.floor((safe.h - height) / 2);
+    return { lines, fontSize: size, box: { x, y, w: width, h: height } };
   };
   for (let size = maxSize; size >= minSize; size = Math.floor(size * 0.96)) {
     const layout = place(words, size);

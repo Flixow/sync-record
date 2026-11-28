@@ -71,7 +71,8 @@ export function layoutPanel(api: ProjectApi, stg: Stage, project: ProjectFile, f
     return { ...source, name: owner, video: own?.video ? api.mediaUrl(own.video.file) : null };
   });
   const preview = layoutPreview(stg, sources, { scenes: state.scenes, aspect: state.aspect, background: state.background });
-  stg.previewSlot.replaceChildren(h("p", { class: "hint" }, t("pj.lay.preview")), preview.el);
+  const previewLabel = h("p", { class: "hint", "data-testid": "pj-lay-preview-label" }, t("pj.lay.preview"));
+  stg.previewSlot.replaceChildren(previewLabel, preview.el);
   const stopFollowing = stg.onTick((ms) => {
     preview.tick(ms);
     markNow(ms);
@@ -238,6 +239,15 @@ export function layoutPanel(api: ProjectApi, stg: Stage, project: ProjectFile, f
   let shownScenes: Scene[] | null = null;
   let shownPlan: object | null = null;
   let shownLook: { scenes: Scene[]; aspect: Aspect; background: Background } | null = null;
+  /** The shape a clip preview shows the program in, instead of the saved one; never written into the layout. */
+  let aspectOverride: Aspect | null = null;
+
+  function pushLook(): void {
+    const aspect = aspectOverride ?? state.aspect;
+    if (shownLook?.scenes === state.scenes && shownLook.aspect === aspect && shownLook.background === state.background) return;
+    shownLook = { scenes: state.scenes, aspect, background: state.background };
+    preview.update(shownLook);
+  }
 
   function sync(): void {
     const { params } = state.plan;
@@ -266,12 +276,14 @@ export function layoutPanel(api: ProjectApi, stg: Stage, project: ProjectFile, f
       shownPlan = state.plan;
       renderScenes();
     }
-    if (shownLook?.scenes !== state.scenes || shownLook.aspect !== state.aspect || shownLook.background !== state.background) {
-      shownLook = { scenes: state.scenes, aspect: state.aspect, background: state.background };
-      preview.update(shownLook);
-    }
+    pushLook();
   }
   const unsubscribe = state.subscribe(sync);
+  const stopClipWatch = stg.onClip((clip) => {
+    aspectOverride = clip?.aspect ?? null;
+    previewLabel.textContent = clip ? t("prev.lay.clip", { aspect: clip.aspect }) : t("pj.lay.preview");
+    pushLook();
+  });
 
   // Ctrl/Cmd+Z in this panel undoes the layout, not the cuts: the panel takes the keys before the page-wide handler.
   const onKey = (event: KeyboardEvent): void => {
@@ -381,6 +393,7 @@ export function layoutPanel(api: ProjectApi, stg: Stage, project: ProjectFile, f
       gone = true;
       unsubscribe();
       stopFollowing();
+      stopClipWatch();
       window.removeEventListener("pagehide", onLeave);
       if (window.__syncPreview === hook) delete window.__syncPreview;
       state.dispose();

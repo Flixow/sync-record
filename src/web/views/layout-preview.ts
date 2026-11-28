@@ -25,6 +25,8 @@ const PAUSED_EPSILON_S = 0.001;
 const SHOWN_TIMEOUT_MS = 8000;
 /** A presented frame further than this from the seek target is a stale one. */
 const STALE_FRAME_S = 0.1;
+/** Pictures of the scenes that start within this long are already playing (hidden, in step with the audio), so a cut shows a ready frame. */
+const WARM_AHEAD_MS = 2000;
 
 /** A picture the preview can show: its size for the layout and the proxy to play (null when the proxies are removed). */
 export interface PreviewSource extends LayoutSource {
@@ -111,13 +113,18 @@ export function layoutPreview(stage: Stage, sources: PreviewSource[], initial: P
   }
 
   let appliedScene: Scene | null = null;
+  /** Index of `appliedScene` in the scene list (-1 for none). */
+  let appliedIndex = -1;
   let dirty = true;
   let visible = new Set<HTMLVideoElement>();
+  /** Pictures that are not on screen but play in step with the audio because the next scene needs them. */
+  let warm = new Set<HTMLVideoElement>();
   let disposed = false;
 
   function layoutSize(): void {
     const canvas = canvasFor(state.aspect, PREVIEW_LONG_EDGE);
-    container.style.width = `${canvas.width}px`;
+    // the canvas is as wide as its long edge allows, and a tall one (9:16) never grows past the height cap, keeping its shape
+    container.style.width = `min(${canvas.width}px, calc(var(--lay-max-height, ${PREVIEW_LONG_EDGE}px) * ${canvas.width} / ${canvas.height}))`;
     container.style.aspectRatio = `${canvas.width} / ${canvas.height}`;
     container.dataset.aspect = state.aspect;
   }
@@ -196,6 +203,32 @@ export function layoutPreview(stage: Stage, sources: PreviewSource[], initial: P
     return shown;
   }
 
+  /**
+   * A picture that was hidden is paused wherever it was, and a seek in a proxy takes a while (up to a second): at a cut
+   * the new tile would show a stale frame or nothing. So the pictures of every scene that starts within the next
+   * WARM_AHEAD_MS are already playing, in step with the audio, when the cut comes.
+   */
+  function warmUp(ms: number): void {
+    const wanted = new Set<HTMLVideoElement>();
+    if (!audio.paused && !audio.ended) {
+      for (let index = appliedIndex + 1; index < state.scenes.length; index++) {
+        const next = state.scenes[index] as Scene;
+        if (next.s > ms + WARM_AHEAD_MS) break;
+        next.sources.forEach((id, order) => {
+          const entry = entries.get(id);
+          if (!entry) return;
+          if (entry.tile instanceof HTMLVideoElement && !visible.has(entry.tile)) wanted.add(entry.tile);
+          // the featured picture of a blurred background is a second copy of that source
+          const backdrop = order === 0 && state.background.kind === "blur" ? backdropOf(entry) : null;
+          if (backdrop && !visible.has(backdrop)) wanted.add(backdrop);
+        });
+      }
+    }
+    for (const video of warm) if (!wanted.has(video) && !visible.has(video) && !video.paused) video.pause();
+    warm = wanted;
+    for (const video of warm) syncOne(video, ms, false);
+  }
+
   function tick(ms: number, hard = false): void {
     if (disposed) return;
     const scene = sceneAt(state.scenes, ms);
@@ -203,11 +236,14 @@ export function layoutPreview(stage: Stage, sources: PreviewSource[], initial: P
       const before = visible;
       visible = place(scene);
       appliedScene = scene;
+      appliedIndex = scene ? state.scenes.indexOf(scene) : -1;
       dirty = false;
-      for (const video of visible) syncOne(video, ms, hard || !before.has(video));
-      return;
+      // a picture that was warming up is already at the right frame: no visible seek at the cut
+      for (const video of visible) syncOne(video, ms, hard || (!before.has(video) && !warm.has(video)));
+    } else {
+      for (const video of visible) syncOne(video, ms, hard);
     }
-    for (const video of visible) syncOne(video, ms, hard);
+    warmUp(ms);
   }
 
   const onAudio = (): void => tick(audio.currentTime * 1000);

@@ -6,6 +6,7 @@ import { chromium, expect, test, type Browser } from "@playwright/test";
 import { E2E_DATA_DIR, E2E_SECRET } from "../../playwright.config.js";
 import { issueToken } from "../../src/server/tokens.js";
 import { makeSyntheticSession } from "../support/synthetic.js";
+import { openFold, openStep, prepareRecordings } from "../support/project-page.js";
 
 // A participant who recorded only a microphone (Bob) next to one with a camera (Ala): the scenes follow Bob's voice too,
 // the source list of a scene offers him, and the preview draws his name card.
@@ -77,8 +78,9 @@ test("a microphone-only participant is a scene source: automatic scenes, the sou
 
   await page.goto(`/project/${SID}`);
   await page.getByTestId("pj-create").click();
-  await page.getByTestId("pj-prepare").click();
-  await expect(page.getByTestId("pj-conform-status")).toHaveAttribute("data-status", "done", { timeout: 120_000 });
+  await prepareRecordings(page);
+  await openStep(page, "episode");
+  await openFold(page, "pj-lay-section");
   await expect(page.getByTestId("pj-layout")).toBeVisible();
 
   await test.step("the scenes switch to the card while Bob speaks", async () => {

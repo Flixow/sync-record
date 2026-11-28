@@ -3,6 +3,7 @@ import { mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { chromium, expect, test, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import { E2E_DATA_DIR } from "../../playwright.config.js";
+import { prepareEpisode } from "../support/project-page.js";
 
 // Chromium flags that replace the camera, microphone and the screen picker with synthetic sources.
 export const FAKE_MEDIA_ARGS = [
@@ -249,11 +250,7 @@ test("two participants record, one tab is killed and resumes, the collector outp
   await expect(host).toHaveURL(/\/project\//);
   // The project does not exist yet: the page offers to create it once its state has loaded (click waits for the button).
   await host.getByTestId("pj-create").click();
-  await host.getByTestId("pj-prepare").click();
-  await expect(host.getByTestId("pj-conform-status")).toHaveAttribute("data-status", "done", { timeout: 180_000 });
-  await host.getByTestId("pj-tr-lang").selectOption("en");
-  await host.getByTestId("pj-tr-start").click();
-  await expect(host.getByTestId("pj-tr-status")).toHaveAttribute("data-status", "done", { timeout: 120_000 });
+  await prepareEpisode(host, { timeout: 180_000 });
   await expect(host.getByTestId("pj-transcript")).toContainText("Hello, world.");
   await expect(host.getByTestId("pj-highlight")).toHaveCount(1); // the M press of the host
   await host.getByTestId("pj-search").fill("world");
