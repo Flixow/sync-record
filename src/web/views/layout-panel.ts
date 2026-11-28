@@ -1,4 +1,4 @@
-import { cardParticipantId, LAYOUT_IDS, type Aspect, type Background, type Fit, type LayoutId } from "../../shared/layout.js";
+import { LAYOUT_IDS, type Aspect, type Background, type Fit, type LayoutId } from "../../shared/layout.js";
 import type { ProjectFile } from "../../shared/project.js";
 import { REASON_TEXT } from "../../shared/clips.js";
 import type { Span } from "../../shared/scene-plan.js";
@@ -6,12 +6,13 @@ import type { Rhythm, Scene } from "../../shared/scenes.js";
 import { h, setChildren } from "../lib/dom.js";
 import { historyKey } from "../lib/keys.js";
 import { ApiError } from "../lib/api.js";
-import type { ProjectApi, ProjectState, ScenesFile } from "../lib/project-api.js";
-import { SceneState } from "../lib/scene-state.js";
+import type { ProjectApi, ProjectState } from "../lib/project-api.js";
+import type { SceneState } from "../lib/scene-state.js";
 import { formatClock } from "../lib/time.js";
 import { getLang, t, type MessageKey } from "../i18n/index.js";
 import { banner } from "./layout.js";
-import { layoutPreview, type PreviewSource } from "./layout-preview.js";
+import { layoutPreview } from "./layout-preview.js";
+import { sceneSources } from "./scene-sources.js";
 import type { Stage } from "./stage.js";
 
 const ASPECTS: readonly Aspect[] = ["16:9", "9:16", "1:1"];
@@ -27,8 +28,6 @@ const MAX_DWELL_MS = 60_000;
 export interface LayoutPanel {
   el: HTMLElement;
   dispose(): void;
-  /** Saves what is pending. */
-  flush(): Promise<void>;
 }
 
 /** Index of the scene that holds `ms` (the last one starting at or before it). */
@@ -55,21 +54,9 @@ const option = (value: string, label: string, selected: boolean): HTMLOptionElem
  * automatic scenes, a list of the scenes with a manual override per scene, and the live preview that goes into the
  * player above. The scene plan has its own undo history and its own save, like the cut list.
  */
-export function layoutPanel(api: ProjectApi, stg: Stage, project: ProjectFile, file: ScenesFile, settings: ProjectState["settings"]): LayoutPanel {
-  const state = new SceneState(api, file);
-
+export function layoutPanel(api: ProjectApi, stg: Stage, project: ProjectFile, state: SceneState, settings: ProjectState["settings"]): LayoutPanel {
   // ---- the preview, above the player ---------------------------------------------------------------------------------
-  const sources: PreviewSource[] = state.sources.map((source) => {
-    const cardOf = cardParticipantId(source.id);
-    if (source.kind === "card" && cardOf !== null) {
-      // a participant with a microphone and no camera: a name card, labelled like the microphone track of the timeline
-      const name = project.participants.find((participant) => participant.id === cardOf)?.name ?? cardOf;
-      return { ...source, name: `${name} · ${t("rec.track.audio")}`, video: null, card: name };
-    }
-    const own = project.sources.find((item) => item.id === source.id);
-    const owner = own ? `${own.participantName}${source.kind === "screen" ? ` · ${t("rec.track.screen")}` : ""}${own.segment > 1 ? ` #${own.segment}` : ""}` : source.id;
-    return { ...source, name: owner, video: own?.video ? api.mediaUrl(own.video.file) : null };
-  });
+  const sources = sceneSources(api, project, state.sources);
   const preview = layoutPreview(stg, sources, { scenes: state.scenes, aspect: state.aspect, background: state.background });
   const previewLabel = h("p", { class: "hint", "data-testid": "pj-lay-preview-label" }, t("pj.lay.preview"));
   stg.previewSlot.replaceChildren(previewLabel, preview.el);
@@ -388,7 +375,6 @@ export function layoutPanel(api: ProjectApi, stg: Stage, project: ProjectFile, f
 
   return {
     el,
-    flush: () => state.flush(),
     dispose() {
       gone = true;
       unsubscribe();
@@ -396,7 +382,6 @@ export function layoutPanel(api: ProjectApi, stg: Stage, project: ProjectFile, f
       stopClipWatch();
       window.removeEventListener("pagehide", onLeave);
       if (window.__syncPreview === hook) delete window.__syncPreview;
-      state.dispose();
       preview.dispose();
       stg.previewSlot.replaceChildren();
       stg.tl.setSceneBounds([]);

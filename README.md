@@ -268,6 +268,13 @@ layout controls; elsewhere the same keys undo cuts). When the proxies have been 
 stays editable. `/project/<id>?hooks=1` exposes `window.__syncPreview.seekMs(ms)` for `scripts/bench-preview-ssim.ts`,
 which compares preview frames with the exported video (SSIM, gate 0.98 per frame).
 
+The Episode step also has a **Timeline** (`docs/episode-timeline.md`): one lane of the picture the episode shows and one of whose voice
+carries it, then per participant a sound lane (waveform), a camera lane and a screen lane. A click on the lanes, the scrubber under the
+toolbar or a click in the transcript moves the player; the view zooms (buttons or `Ctrl/Cmd` + wheel) and follows playback. Dragging
+over the lanes selects a stretch, and a click on the picture lane selects a scene; for the selection you pick the main picture and the
+layout, or put it back to automatic. These are the same overrides, history and save as the scene table above, so the table, the
+timeline, the preview and the export always agree. The microphones are always in the mix; the timeline only decides the picture.
+
 ### Captions
 
 Exports can burn in captions (four presets, bundled Noto Sans, Polish diacritics included, word highlighting on two of

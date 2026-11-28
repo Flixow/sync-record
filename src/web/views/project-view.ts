@@ -4,6 +4,7 @@ import { presetById } from "../../shared/presets.js";
 import type { JobRecord, ProjectFile } from "../../shared/project.js";
 import { ApiError, SessionApi } from "../lib/api.js";
 import { h, setChildren } from "../lib/dom.js";
+import { SceneState } from "../lib/scene-state.js";
 import type { ExportRecord, ProjectApi, ProjectState } from "../lib/project-api.js";
 import { formatBytes, formatDuration } from "../lib/storage-math.js";
 import { formatNumber } from "../lib/number.js";
@@ -13,7 +14,9 @@ import { exportPanel, type ExportPanel } from "./export-panel.js";
 import { claimLinkPanel } from "./access.js";
 import { failureBanner, progressBar, stageLabel } from "./job-status.js";
 import { banner, card, page, scrollable } from "./layout.js";
+import { episodeTimeline, type EpisodeTimeline } from "./episode-timeline.js";
 import { layoutPanel, type LayoutPanel } from "./layout-panel.js";
+import { sceneSources } from "./scene-sources.js";
 import { publishPanel, type PublishPanel } from "./publish-panel.js";
 import { stage, type Stage } from "./stage.js";
 import { isStepId, stepTabs, type StepId } from "./steps.js";
@@ -210,6 +213,8 @@ export function projectView(api: ProjectApi): { el: HTMLElement; dispose: () => 
   // step 1
   const prepHost = h("div", { class: "stack" });
   // step 2
+  const tlHost = h("div");
+  const tlSection = h("details", { class: "ws-fold", open: true, hidden: true, "data-testid": "pj-tl-section" }, h("summary", {}, t("tl.title")), tlHost);
   const layHost = h("div");
   const laySection = h("details", { class: "ws-fold", hidden: true, "data-testid": "pj-lay-section" }, h("summary", {}, t("flow.ep.layout")), layHost);
   const exHost = h("div");
@@ -241,6 +246,7 @@ export function projectView(api: ProjectApi): { el: HTMLElement; dispose: () => 
     epNotes,
     epNoPicture,
     filesHost,
+    tlSection,
     laySection,
     exSection,
   );
@@ -276,8 +282,22 @@ export function projectView(api: ProjectApi): { el: HTMLElement; dispose: () => 
   let stgKey = "";
   let trPanel: TranscriptPanel | null = null;
   let trKey = "";
-  let layPanel: LayoutPanel | null = null;
+  /** The layout of the program: one scene state edited by the layout fold and by the timeline. */
+  interface LayoutBoard {
+    state: SceneState;
+    panel: LayoutPanel;
+    timeline: EpisodeTimeline | null;
+  }
+  let lay: LayoutBoard | null = null;
   let layKey = "";
+  let audioTimeline: EpisodeTimeline | null = null;
+  let audioKey = "";
+
+  function disposeBoard(board: LayoutBoard | null): void {
+    board?.timeline?.dispose();
+    board?.panel.dispose();
+    board?.state.dispose();
+  }
   let exPanel: ExportPanel | null = null;
   let clPanel: ClipsPanel | null = null;
   let pubPanel: PublishPanel | null = null;
@@ -290,21 +310,26 @@ export function projectView(api: ProjectApi): { el: HTMLElement; dispose: () => 
     if (key === stgKey) return;
     stgKey = key;
     const old = stg;
-    const oldLayout = layPanel;
+    const oldLayout = lay;
     stg = null;
     trPanel?.dispose();
     trPanel = null;
     trKey = "";
     trEmpty.hidden = false;
-    layPanel = null;
+    lay = null;
     layKey = "";
+    audioTimeline?.dispose();
+    audioTimeline = null;
+    audioKey = "";
     setChildren(trHost);
     setChildren(layHost);
+    setChildren(tlHost);
+    tlSection.hidden = true;
     stageSection.hidden = true;
     void (async () => {
       // the new stage reads the saved cut list: let the old one finish saving it first
-      await Promise.allSettled([old?.flush(), oldLayout?.flush()]);
-      oldLayout?.dispose();
+      await Promise.allSettled([old?.flush(), oldLayout?.state.flush()]);
+      disposeBoard(oldLayout);
       old?.dispose();
       setChildren(stageHost);
       if (!key) return;
@@ -354,27 +379,47 @@ export function projectView(api: ProjectApi): { el: HTMLElement; dispose: () => 
     laySection.hidden = key === "";
     if (key === layKey) return;
     layKey = key;
-    const old = layPanel;
-    layPanel = null;
+    const old = lay;
+    lay = null;
     setChildren(layHost);
+    setChildren(tlHost);
     if (!key || !stg) {
-      old?.dispose();
+      disposeBoard(old);
       return;
     }
     const mine = stg;
     void (async () => {
       // the new panel reads the saved layout: let the old one finish saving it first
-      await old?.flush().catch(() => undefined);
-      old?.dispose();
+      await old?.state.flush().catch(() => undefined);
+      disposeBoard(old);
       try {
         const file = await api.scenes();
         if (disposed || layKey !== key || stg !== mine || !state) return;
-        layPanel = layoutPanel(api, mine, state.project, file, state.settings);
-        setChildren(layHost, layPanel.el);
+        const scenes = new SceneState(api, file);
+        const panel = layoutPanel(api, mine, state.project, scenes, state.settings);
+        const board: LayoutBoard = { state: scenes, panel, timeline: null };
+        board.timeline = episodeTimeline(api, mine, state.project, { state: scenes, sources: sceneSources(api, state.project, scenes.sources) });
+        lay = board;
+        setChildren(layHost, panel.el);
+        setChildren(tlHost, board.timeline.el);
+        tlSection.hidden = false;
       } catch (error) {
         setChildren(layHost, banner("error", errorText(error), "pj-lay-error"));
       }
     })();
+  }
+
+  function syncAudioTimeline(project: ProjectFile): void {
+    const key = stg && !hasPictures(project) && hasAudio(project) ? stgKey : "";
+    if (key === audioKey) return;
+    audioKey = key;
+    audioTimeline?.dispose();
+    audioTimeline = null;
+    setChildren(tlHost);
+    tlSection.hidden = key === "";
+    if (!key || !stg) return;
+    audioTimeline = episodeTimeline(api, stg, project, null);
+    setChildren(tlHost, audioTimeline.el);
   }
 
   function syncExport(current: ProjectState): void {
@@ -614,6 +659,7 @@ export function projectView(api: ProjectApi): { el: HTMLElement; dispose: () => 
   function syncPanels(current: ProjectState): void {
     syncTranscript(current);
     syncLayout(current.project);
+    syncAudioTimeline(current.project);
     renderEpisode(current);
   }
 
@@ -685,7 +731,8 @@ export function projectView(api: ProjectApi): { el: HTMLElement; dispose: () => 
       window.clearTimeout(timer);
       wide.removeEventListener("change", keepOpen);
       trPanel?.dispose();
-      layPanel?.dispose();
+      disposeBoard(lay);
+      audioTimeline?.dispose();
       exPanel?.dispose();
       clPanel?.dispose();
       pubPanel?.dispose();

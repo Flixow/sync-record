@@ -84,7 +84,7 @@ export async function makeSyntheticSession(options: SyntheticOptions): Promise<S
   const sessionDir = path.join(options.storageDir, "session", options.sessionId);
 
   for (const [index, spec] of options.participants.entries()) {
-    const pid = `p${index + 1}-${spec.name.toLowerCase()}`;
+    const pid = `p${index + 1}-${spec.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
     const dir = path.join(sessionDir, pid);
     await mkdir(dir, { recursive: true });
     const rate = 1 + spec.audioPpm * 1e-6;
