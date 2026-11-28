@@ -43,8 +43,8 @@ describe("participantLanes", () => {
 
   it("gives each participant the lanes of what was recorded, and a microphone-only participant sound alone", () => {
     const [daniel, michal] = participantLanes(project);
-    expect(daniel).toMatchObject({ name: "Daniel", audio: ["d-mic.peaks"], camera: [{ s: 1000, e: 51_000 }], screen: [{ s: 20_000, e: 30_000 }] });
-    expect(michal).toMatchObject({ name: "Michał", audio: ["m-mic-1.peaks", "m-mic-2.peaks"], camera: [], screen: [] });
+    expect(daniel).toMatchObject({ name: "Daniel", audio: ["d-mic.levels"], camera: [{ s: 1000, e: 51_000 }], screen: [{ s: 20_000, e: 30_000 }] });
+    expect(michal).toMatchObject({ name: "Michał", audio: ["m-mic-1.levels", "m-mic-2.levels"], camera: [], screen: [] });
   });
 
   it("lists a participant that only the sources know, and none without any track", () => {
@@ -54,28 +54,24 @@ describe("participantLanes", () => {
 });
 
 describe("soundRuns", () => {
-  const frames = (...parts: [number, number][]): Uint8Array => {
-    const out = new Uint8Array(1000);
-    for (const [from, value] of parts) out.fill(value, from, from + 100);
+  const track = (floor: number, ...parts: [number, number, number][]): Int8Array => {
+    const out = new Int8Array(500).fill(floor);
+    for (const [from, to, value] of parts) out.fill(value, from, to);
     return out;
   };
 
-  it("names the loudest participant of each moment and ignores the noise floor", () => {
-    const daniel = frames([0, 200], [300, 6]);
-    const michal = frames([100, 180], [300, 8]);
-    const runs = soundRuns([daniel, michal], 10_000);
-    expect(runs).toEqual([
+  it("names the participant who speaks at each moment and ignores noise", () => {
+    const daniel = track(-80, [0, 50, -20], [100, 110, -55]);
+    const michal = track(-80, [50, 100, -22]);
+    expect(soundRuns([daniel, michal], 10_000)).toEqual([
       { s: 0, e: 1000, who: 0 },
       { s: 1000, e: 2000, who: 1 },
     ]);
   });
 
   it("closes a short gap inside one voice and drops a blip", () => {
-    const track = new Uint8Array(1000);
-    track.fill(100, 0, 100);
-    track.fill(100, 120, 220);
-    track.fill(100, 400, 410);
-    expect(soundRuns([track], 10_000)).toEqual([{ s: 0, e: 2200, who: 0 }]);
+    const levels = track(-80, [0, 20, -20], [25, 45, -20], [200, 204, -20]);
+    expect(soundRuns([levels], 10_000)).toEqual([{ s: 0, e: 900, who: 0 }]);
   });
 });
 

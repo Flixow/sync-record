@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { CONFORM_SAMPLE_RATE, LEVEL_FLOOR_DB, LEVEL_FRAME_MS, PEAKS_PER_SECOND, PROXY_HEIGHT, frameMs, type JobRecord, type ProjectFile, type ProjectSource } from "../../shared/project.js";
 import type { Config } from "../config.js";
 import { ffmpeg, runTool } from "./exec.js";
+import { boostFilter, microphoneLevels } from "./mic-levels.js";
 import type { JobContext } from "./jobs.js";
 import type { ProjectStore } from "./projects.js";
 
@@ -309,15 +310,18 @@ async function buildMix(ctx: JobContext, deps: ConformDeps, project: ProjectFile
   // the mix is kept only when it was made from exactly these tracks: a file made before a late track arrived has the right length and
   // would otherwise be kept, so the participant of that track is missing from the preview
   const signatureFile = path.join(dir, "proxies", "mix.sources");
-  const signature = inputs.map((source) => source.audio?.file ?? "").sort().join("\n");
+  const { boosts } = await microphoneLevels(project, dir);
+  const boostOf = (source: ProjectSource): number => boosts.get(source.id) ?? 0;
+  const signature = inputs.map((source) => `${source.audio?.file ?? ""} ${boostOf(source)}`).sort().join("\n");
   if ((await readFile(signatureFile, "utf8").catch(() => null)) !== signature) await rm(absolute, { force: true });
   if (!(await keepExisting(absolute, () => durationOf(deps.config.ffprobePath, absolute), projectSec, tolerance))) {
     await mkdir(path.dirname(absolute), { recursive: true });
     const temp = path.join(dir, "proxies", "mix.part.m4a");
     const args: string[] = [];
     for (const source of inputs) args.push("-i", path.join(dir, source.audio?.file ?? ""));
-    const labels = inputs.map((_, index) => `[${index}:a]`).join("");
-    const filter = inputs.length === 1 ? "[0:a]alimiter=limit=0.95[out]" : `${labels}amix=inputs=${inputs.length}:normalize=0:duration=longest,alimiter=limit=0.95[out]`;
+    const lifted = inputs.map((source, index) => (boostOf(source) > 0 ? `[${index}:a]${boostFilter(boostOf(source))}[b${index}];` : ""));
+    const labels = inputs.map((source, index) => (boostOf(source) > 0 ? `[b${index}]` : `[${index}:a]`)).join("");
+    const filter = `${lifted.join("")}${inputs.length === 1 ? `${labels}alimiter=limit=0.95[out]` : `${labels}amix=inputs=${inputs.length}:normalize=0:duration=longest,alimiter=limit=0.95[out]`}`;
     await ffmpeg(ctx, { ffmpegPath: deps.config.ffmpegPath, threads: ctx.threads, expectedSec: projectSec, onProgress }, [
       ...args, "-filter_complex", filter, "-map", "[out]", "-ac", "1", "-c:a", "aac", "-b:a", "96k", "-threads", String(ctx.threads), "-movflags", "+faststart", "-f", "mp4", temp,
     ]);

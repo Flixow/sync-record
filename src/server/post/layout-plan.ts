@@ -1,8 +1,7 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { CARD_SIZE, cardSourceId, type LayoutSource } from "../../shared/layout.js";
 import { LEVEL_FLOOR_DB, type ProjectFile, type ProjectSource } from "../../shared/project.js";
 import { applyOverrides, planScenes, type ActivityTrack, type Scene, type ScenePlan } from "../../shared/scenes.js";
+import { microphoneLevels } from "./mic-levels.js";
 
 const isPicture = (source: ProjectSource): boolean => source.hasVideo && Boolean(source.width) && Boolean(source.height) && (source.kind === "camera" || source.kind === "screen");
 
@@ -73,12 +72,6 @@ export function microphoneOf(project: ProjectFile, picture: ProjectSource): Proj
   return best;
 }
 
-/** The level track of a file of the project directory. */
-async function levelsOf(dir: string, file: string): Promise<Int8Array> {
-  const buffer = await readFile(path.join(dir, file));
-  return new Int8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-}
-
 /** Per 20 ms frame the loudest of several level tracks (a participant who recorded in several segments is one voice). */
 function loudest(tracks: Int8Array[]): Int8Array {
   const first = tracks[0];
@@ -93,6 +86,8 @@ function loudest(tracks: Int8Array[]): Int8Array {
  * card while the microphone of its participant has speech, a screen is a picture only.
  */
 export async function activityTracks(project: ProjectFile, dir: string): Promise<ActivityTrack[]> {
+  const { levels: byId } = await microphoneLevels(project, dir);
+  const levelsOf = (source: ProjectSource | undefined): Int8Array => (source ? byId.get(source.id) : undefined) ?? new Int8Array(0);
   const out: ActivityTrack[] = [];
   for (const source of pictures(project)) {
     if (source.kind === "screen") {
@@ -101,11 +96,10 @@ export async function activityTracks(project: ProjectFile, dir: string): Promise
     }
     const mic = microphoneOf(project, source);
     if (!mic?.audio) continue;
-    out.push({ id: source.id, levels: await levelsOf(dir, mic.audio.levels), kind: "camera" });
+    out.push({ id: source.id, levels: levelsOf(mic), kind: "camera" });
   }
   for (const card of cardsOf(project)) {
-    const levels = await Promise.all(card.microphones.map((mic) => levelsOf(dir, mic.audio?.levels ?? "")));
-    out.push({ id: card.id, levels: loudest(levels), kind: "camera" });
+    out.push({ id: card.id, levels: loudest(card.microphones.map(levelsOf)), kind: "camera" });
   }
   return out;
 }

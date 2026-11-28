@@ -1,6 +1,7 @@
 import { cardParticipantId, type LayoutId } from "./layout.js";
-import { PEAKS_PER_SECOND, type ProjectFile, type ProjectSource } from "./project.js";
+import { LEVEL_FLOOR_DB, LEVEL_FRAME_MS, PEAKS_PER_SECOND, type ProjectFile, type ProjectSource } from "./project.js";
 import { sceneAt, type Scene, type SceneOverride } from "./scenes.js";
+import { DEFAULT_VAD, speechFrames } from "./vad.js";
 
 export interface Span {
   s: number;
@@ -10,7 +11,7 @@ export interface Span {
 export interface ParticipantLanes {
   participantId: string;
   name: string;
-  /** Peak files of the participant's microphone tracks, one per segment. */
+  /** Level files of the participant's microphone tracks, one per segment. */
   audio: string[];
   camera: Span[];
   screen: Span[];
@@ -20,7 +21,8 @@ export const MIN_SELECTION_MS = 200;
 export const SNAP_MS = 100;
 export const MAX_PX_PER_SEC = 240;
 const PEAK_MS = 1000 / PEAKS_PER_SECOND;
-const SOUND_FLOOR = 10;
+const BAR_RANGE_DB = 50;
+const BAR_FLOOR_DB = -60;
 const SOUND_GAP_MS = 300;
 const SOUND_MIN_MS = 120;
 const TICK_STEPS_SEC = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
@@ -38,7 +40,7 @@ export function participantLanes(project: ProjectFile): ParticipantLanes[] {
     const lane: ParticipantLanes = {
       participantId,
       name: known.get(participantId) ?? own[0]?.participantName ?? participantId,
-      audio: own.filter((source) => source.kind !== "screen" && source.audio !== null).map((source) => (source.audio as NonNullable<ProjectSource["audio"]>).peaks),
+      audio: own.filter((source) => source.kind !== "screen" && source.audio !== null).map((source) => (source.audio as NonNullable<ProjectSource["audio"]>).levels),
       camera: own.filter((source) => source.kind === "camera" && source.hasVideo).map(spanOf),
       screen: own.filter((source) => source.kind === "screen" && source.hasVideo).map(spanOf),
     };
@@ -58,17 +60,25 @@ export interface SoundRun extends Span {
 }
 
 /**
- * Who carries the sound at every moment: per 10 ms the participant with the loudest microphone, when it is above the noise floor.
+ * Who carries the sound at every moment: per 20 ms the participant with the loudest microphone among those the voice
+ * detector hears speaking (`levels` are the lifted level tracks, one per participant).
  * Neighbouring frames of one participant join, gaps under 300 ms between two runs of the same one are closed, and runs under 120 ms are dropped.
  */
-export function soundRuns(tracks: Uint8Array[], durationMs: number): SoundRun[] {
-  const frames = Math.ceil(durationMs / PEAK_MS);
+export function soundRuns(levels: Int8Array[], durationMs: number): SoundRun[] {
+  const frames = Math.ceil(durationMs / LEVEL_FRAME_MS);
+  const speaking = levels.map((own, who) =>
+    speechFrames(
+      own,
+      DEFAULT_VAD,
+      levels.filter((_, other) => other !== who),
+    ),
+  );
   const owner = new Int16Array(frames).fill(-1);
   for (let frame = 0; frame < frames; frame++) {
-    let loudest = SOUND_FLOOR;
-    for (let who = 0; who < tracks.length; who++) {
-      const value = (tracks[who] as Uint8Array)[frame] ?? 0;
-      if (value > loudest) {
+    let loudest = LEVEL_FLOOR_DB;
+    for (let who = 0; who < levels.length; who++) {
+      const value = (levels[who] as Int8Array)[frame] ?? LEVEL_FLOOR_DB;
+      if ((speaking[who] as Uint8Array)[frame] === 1 && value > loudest) {
         loudest = value;
         owner[frame] = who;
       }
@@ -79,7 +89,7 @@ export function soundRuns(tracks: Uint8Array[], durationMs: number): SoundRun[] 
   for (let frame = 1; frame <= frames; frame++) {
     if (frame < frames && owner[frame] === owner[start]) continue;
     const who = owner[start] as number;
-    if (who >= 0) runs.push({ s: start * PEAK_MS, e: frame * PEAK_MS, who });
+    if (who >= 0) runs.push({ s: start * LEVEL_FRAME_MS, e: frame * LEVEL_FRAME_MS, who });
     start = frame;
   }
   const joined: SoundRun[] = [];
@@ -91,7 +101,24 @@ export function soundRuns(tracks: Uint8Array[], durationMs: number): SoundRun[] 
   return joined.filter((run) => run.e - run.s >= SOUND_MIN_MS);
 }
 
-/** The loudest peak of `peaks` in each of `width` equal parts of [startMs, endMs). */
+/** The loudest of several level tracks per frame (a participant who recorded in several segments is one voice). */
+export function combineLevels(tracks: Int8Array[]): Int8Array {
+  const out = new Int8Array(tracks.reduce((max, track) => Math.max(max, track.length), 0)).fill(LEVEL_FLOOR_DB);
+  for (const track of tracks) for (let frame = 0; frame < track.length; frame++) if ((track[frame] as number) > (out[frame] as number)) out[frame] = track[frame] as number;
+  return out;
+}
+
+/** A level track as bars of 10 ms for `windowColumns`: 0 at -60 dB, 255 at -10 dB. */
+export function levelBars(levels: Int8Array): Uint8Array {
+  const bars = new Uint8Array(levels.length * 2);
+  for (let frame = 0; frame < levels.length; frame++) {
+    const bar = Math.round((255 * ((levels[frame] as number) - BAR_FLOOR_DB)) / BAR_RANGE_DB);
+    bars[frame * 2] = bars[frame * 2 + 1] = Math.max(0, Math.min(255, bar));
+  }
+  return bars;
+}
+
+/** The loudest bar of `peaks` in each of `width` equal parts of [startMs, endMs). */
 export function windowColumns(peaks: Uint8Array, startMs: number, endMs: number, width: number): Uint8Array {
   const columns = new Uint8Array(Math.max(0, width));
   if (width <= 0 || endMs <= startMs) return columns;

@@ -1,5 +1,3 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { suggestClips } from "../../shared/clips.js";
 import { planSegments, overridesFor, spansFor, type Span } from "../../shared/scene-plan.js";
 import type { SceneOverride } from "../../shared/scenes.js";
@@ -8,6 +6,7 @@ import { HttpError } from "../errors.js";
 import { languageOf, speakerLevels, transcriptOf } from "./api-publish.js";
 import type { PostProduction } from "./index.js";
 import { activityTracks, resolveScenes } from "./layout-plan.js";
+import { microphoneLevels } from "./mic-levels.js";
 import { createLlmClient, llmScenePlan } from "./llm.js";
 import { readScenes } from "./scenes-store.js";
 
@@ -56,11 +55,7 @@ export async function suggestScenePlan(post: PostProduction, sid: string, useMod
   }
 
   // rules: long dead air as cuts, the best clip suggestions as highlights
-  const levels: Int8Array[] = [];
-  for (const source of project.sources) {
-    if (!source.audio) continue;
-    levels.push(new Int8Array(await readFile(path.join(dir, source.audio.levels)).then((buffer) => buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength), notPrepared)));
-  }
+  const levels = [...(await microphoneLevels(project, dir).catch(notPrepared)).levels.values()];
   const cuts = detectSilences(levels, project.durationMs, DEFAULT_SILENCE)
     .filter((silence) => silence.endMs - silence.startMs >= LONG_SILENCE_MS)
     .slice(0, MAX_RULE_CUTS)

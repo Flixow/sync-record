@@ -256,16 +256,16 @@ export async function prepareClean(options: CleanOptions, tracks: CleanTrack[], 
 
 /**
  * Graph lines that clean every track. Track `i` is read from input `trackInputs[i]` and the extra inputs start at input
- * `firstExtraInput`. `labels[i]` is the pad to feed the mix with: the cleaned track, or the track's own `[n:a]` pad when
+ * `firstExtraInput`. `sources[i]`, when given, is the pad that carries track `i` instead of `[input:a]` (a track already lifted). `labels[i]` is the pad to feed the mix with: the cleaned track, or the track's own `[n:a]` pad when
  * nothing applies to it (so a graph with all options off is unchanged).
  */
-export function cleanInputsGraph(clean: PreparedClean, trackInputs: number[], firstExtraInput: number): { lines: string[]; labels: string[] } {
+export function cleanInputsGraph(clean: PreparedClean, trackInputs: number[], firstExtraInput: number, sources: string[] = []): { lines: string[]; labels: string[] } {
   const lines: string[] = [];
   const labels: string[] = [];
   trackInputs.forEach((input, index) => {
     const chain = clean.chains[index] ?? "";
     const gate = clean.gateInputs[index] ?? null;
-    let label = `[${input}:a]`;
+    let label = sources[index] ?? `[${input}:a]`;
     if (chain !== "") {
       lines.push(`${label}${chain}[cl${index}]`);
       label = `[cl${index}]`;

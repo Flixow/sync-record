@@ -1,10 +1,12 @@
 import type { Range } from "../../shared/edl.js";
 import {
   clampZoom,
+  combineLevels,
   commonOf,
   dragRange,
   fitPxPerSec,
   layoutOverride,
+  levelBars,
   msToPx,
   participantLanes,
   pxToMs,
@@ -21,6 +23,7 @@ import {
   type Span,
 } from "../../shared/episode-timeline.js";
 import { LAYOUT_IDS, type LayoutId } from "../../shared/layout.js";
+import { boostLevels, boostsDb } from "../../shared/mic-balance.js";
 import type { ProjectFile } from "../../shared/project.js";
 import type { Scene } from "../../shared/scenes.js";
 import { h, setChildren } from "../lib/dom.js";
@@ -30,7 +33,6 @@ import { formatClock, formatSeconds } from "../lib/time.js";
 import { t } from "../i18n/index.js";
 import type { PreviewSource } from "./layout-preview.js";
 import type { Stage } from "./stage.js";
-import { combinePeaks } from "./timeline.js";
 
 const PALETTE = ["#2563eb", "#d97706", "#059669", "#9333ea", "#db2777", "#0891b2"];
 const HEIGHT = { ruler: 24, picture: 46, sound: 26, audio: 40, camera: 20, screen: 20 } as const;
@@ -206,7 +208,7 @@ export function episodeTimeline(api: ProjectApi, stg: Stage, project: ProjectFil
     ctx.fillStyle = color;
     const mid = height / 2;
     for (let x = 0; x < viewport; x++) {
-      const amplitude = Math.sqrt((columns[x] as number) / 255);
+      const amplitude = (columns[x] as number) / 255;
       const half = Math.max(0.5, amplitude * (mid - 1));
       ctx.fillRect(x, mid - half, 1, half * 2);
     }
@@ -510,14 +512,17 @@ export function episodeTimeline(api: ProjectApi, stg: Stage, project: ProjectFil
 
   void Promise.allSettled(
     people.map(async (person) => {
-      const tracks = await Promise.all(person.audio.map((file) => api.peaks(file)));
-      return combinePeaks(tracks);
+      const tracks = await Promise.all(person.audio.map(async (file) => new Int8Array((await api.peaks(file)).buffer)));
+      return combineLevels(tracks);
     }),
   ).then((results) => {
     if (disposed) return;
-    personPeaks = results.map((result) => (result.status === "fulfilled" ? result.value : null));
-    const loaded = personPeaks.map((peaks) => peaks ?? new Uint8Array(0));
-    runs = soundRuns(loaded, durationMs);
+    const found = results.map((result) => (result.status === "fulfilled" ? result.value : null));
+    const loaded = found.map((levels) => levels ?? new Int8Array(0));
+    const boosts = boostsDb(loaded);
+    const lifted = loaded.map((levels, index) => boostLevels(levels, boosts[index] ?? 0));
+    personPeaks = found.map((levels, index) => (levels ? levelBars(lifted[index] as Int8Array) : null));
+    runs = soundRuns(lifted, durationMs);
     soundRow.lane.dataset.speakers = [...new Set(runs.map((run) => (people[run.who] as ParticipantLanes).name))].join("|");
     soundRow.lane.dataset.runs = String(runs.length);
     for (const [id, row] of audioRows) row.lane.dataset.loaded = String(personPeaks[people.findIndex((person) => person.participantId === id)] !== null);

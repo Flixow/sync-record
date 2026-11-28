@@ -274,6 +274,8 @@ toolbar or a click in the transcript moves the player; the view zooms (buttons o
 over the lanes selects a stretch, and a click on the picture lane selects a scene; for the selection you pick the main picture and the
 layout, or put it back to automatic. These are the same overrides, history and save as the scene table above, so the table, the
 timeline, the preview and the export always agree. The microphones are always in the mix; the timeline only decides the picture.
+A microphone recorded much quieter than the others (more than 10 dB under the loudest) is lifted by a static boost, up to 48 dB, before voice
+activity, scenes, silences, the transcript, the preview mix and the export compare or mix it; run **Prepare again** on an older project to rebuild its mix.
 
 ### Captions
 

@@ -7,6 +7,7 @@ import type { PostProduction } from "./index.js";
 import { freeBytes } from "./jobs.js";
 import { TRANSCRIPT_FILE } from "./transcribe.js";
 import { layoutSources, resolveScenes } from "./layout-plan.js";
+import { microphoneLevels } from "./mic-levels.js";
 import { parseScenes, readScenes, saveScenes } from "./scenes-store.js";
 import { suggestScenePlan } from "./scene-suggest.js";
 import { llmTransport } from "./llm.js";
@@ -234,12 +235,7 @@ export async function postRoutes(post: PostProduction, http: Http, req: Incoming
       keepMs: number("keepMs", DEFAULT_SILENCE.keepMs, 0, 5000),
       edgeMs: number("edgeMs", DEFAULT_SILENCE.edgeMs, 0, 1000),
     };
-    const levels: Int8Array[] = [];
-    for (const source of project.sources) {
-      if (!source.audio) continue;
-      const buffer = await readFile(path.join(post.store.dir(sid), source.audio.levels));
-      levels.push(new Int8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength));
-    }
+    const levels = [...(await microphoneLevels(project, post.store.dir(sid))).levels.values()];
     if (levels.length === 0) throw new HttpError(409, "not_prepared");
     http.json(res, 200, { options, silences: detectSilences(levels, project.durationMs, options) });
     return true;

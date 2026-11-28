@@ -13,6 +13,7 @@ import type { TranscriptFile } from "../../shared/transcript.js";
 import { HttpError } from "../errors.js";
 import * as v from "../validate.js";
 import { readEdl } from "./edl-store.js";
+import { microphoneLevels } from "./mic-levels.js";
 import type { Http } from "./api.js";
 import type { PostProduction } from "./index.js";
 import { agentClips } from "./shorts-agent.js";
@@ -63,13 +64,13 @@ export async function transcriptOf(post: PostProduction, sid: string): Promise<T
 
 /** Level tracks of every participant's microphone, by participant id. */
 export async function speakerLevels(project: ProjectFile, dir: string): Promise<{ pid: string; levels: Int8Array }[]> {
+  const { levels } = await microphoneLevels(project, dir).catch(() => ({ levels: new Map<string, Int8Array>() }));
   const out: { pid: string; levels: Int8Array }[] = [];
   for (const participant of project.participants) {
     const own = project.sources.filter((source) => source.participantId === participant.id && source.audio);
     const mic = own.find((source) => source.kind === "audio") ?? own[0];
-    if (!mic?.audio) continue;
-    const buffer = await readFile(path.join(dir, mic.audio.levels)).catch(() => null);
-    if (buffer) out.push({ pid: participant.id, levels: new Int8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength) });
+    const micLevels = mic ? levels.get(mic.id) : undefined;
+    if (micLevels) out.push({ pid: participant.id, levels: micLevels });
   }
   return out;
 }

@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rm } from "node:fs/promises";
+import { mkdir, open, rm } from "node:fs/promises";
 import path from "node:path";
 import { EMPTY_TRANSCRIPT, type JobRecord, type ProjectSource } from "../../shared/project.js";
 import { TRANSCRIPT_SCHEMA_VERSION, dedupeBleed, wordKey, type TranscriptFile, type TranscriptWord } from "../../shared/transcript.js";
@@ -6,6 +6,7 @@ import { DEFAULT_VAD, chunkTimeToTrack, detectSpeech, packChunks, type Chunk } f
 import type { Config } from "../config.js";
 import { ASR_SAMPLE_RATE, writeWav, type AsrEngine } from "./asr.js";
 import { ffmpeg } from "./exec.js";
+import { microphoneLevels } from "./mic-levels.js";
 import type { JobContext } from "./jobs.js";
 import { writeJson, type ProjectStore } from "./projects.js";
 
@@ -22,11 +23,6 @@ const BATCH = 16;
 const BYTES_PER_MS = (ASR_SAMPLE_RATE / 1000) * 2;
 
 const LANG = /^(auto|[a-z]{2,3})$/;
-
-async function readLevels(file: string): Promise<Int8Array> {
-  const buffer = await readFile(file);
-  return new Int8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-}
 
 /** Cuts the packed chunk (speech parts separated by silence) out of a raw PCM file. */
 async function chunkPcm(handle: Awaited<ReturnType<typeof open>>, chunk: Chunk, pad: number): Promise<Buffer> {
@@ -64,8 +60,7 @@ export function transcribeHandler(deps: TranscribeDeps) {
       ctx.progress(0.01, "model");
       await deps.engine.ensureModel(ctx);
 
-      const levels = new Map<string, Int8Array>();
-      for (const source of sources) levels.set(source.id, await readLevels(path.join(dir, source.audio.levels)));
+      const { levels } = await microphoneLevels(project, dir);
 
       // plan: speech chunks per source
       const plans = sources.map((source) => {

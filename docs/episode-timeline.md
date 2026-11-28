@@ -11,8 +11,8 @@ Top to bottom, on one shared time axis:
 | --- | --- |
 | Ruler | project duration, tick step follows the zoom |
 | Picture (program) | `SceneState.scenes`: the scenes the episode uses now (automatic plan with the manual overrides on top). A block carries the main source, the layout when it shows several, and a mark when the stretch is manual |
-| Sound (program) | the loudest participant per instant, from the peak files of the participants' microphones. The preview mix and the export contain every microphone, so this lane says whose voice carries the moment |
-| per participant: Audio | waveform of the participant's microphone tracks (`api.peaks`, one lane per participant, several segments combined) |
+| Sound (program) | the participant the voice detector hears speaking (the loudest one when several do), from the level files of the microphones after the lift described below. The preview mix and the export contain every microphone, so this lane says whose voice carries the moment |
+| per participant: Audio | level bars of the participant's microphone tracks (the level files, one lane per participant, several segments combined, after the lift) |
 | per participant: Camera, Screen | the stretches of the project in which the participant's camera / screen share exists (`offsetMs`, `timelineDurationMs`) |
 
 A participant without a camera has an Audio lane only; the picture lane shows his name card while he is the main source.
@@ -47,3 +47,10 @@ be a second plan next to the scene plan and is not part of this change.
 - `src/web/views/episode-timeline.ts`: the view. Lanes are laid out in one scroll area; waveform, sound and ruler are painted on a canvas that covers the visible window only (sticky), so a long episode at high zoom never allocates a huge canvas.
 - `src/web/views/scene-sources.ts`: the names of the sources, shared with the layout panel (one place that turns a `LayoutSource` into a participant label).
 - The layout panel receives the `SceneState` from the page instead of creating it, so the fold and the timeline edit one plan.
+
+## Quiet microphones
+
+A microphone recorded far under the others (project 786efff994197fc56c3c: one track peaks at -39 dBFS, the other at -3) is lifted by `shared/mic-balance`
+before anything compares tracks: a static boost per microphone toward the loudest one (the 99th percentile of its level frames), 0 for a track within 10 dB of it, at most 48 dB.
+Voice activity, scene planning, silence detection, the transcript, the sound lane, the preview mix (`proxies/mix.m4a`, signature includes the boosts) and the export all use the same boost.
+Without it a quiet speaker is never "speaking" (the detector needs -50 dBFS), is never the main picture and is inaudible next to a loud track.
