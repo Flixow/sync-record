@@ -41,7 +41,7 @@ test.beforeAll(async () => {
     storageDir: E2E_DATA_DIR,
     durationSec: DURATION_SEC,
     participants: [
-      { name: "Ala", startOffsetMs: 0, audioPpm: 0, clientClockPpm: 0, camera: true, audioFile: ala },
+      { name: "Ala", startOffsetMs: 0, audioPpm: 0, clientClockPpm: 0, camera: true, audioFile: ala, screens: [{ startMs: 4000, durationSec: 5 }, { startMs: 21_000, durationSec: 6 }] },
       { name: "Bob Builder", startOffsetMs: 0, audioPpm: 0, clientClockPpm: 0, camera: false, audioFile: bob },
     ],
     eventsMs: [4000, 10_000, 16_000, 22_000],
@@ -99,15 +99,18 @@ test("the episode timeline shows every participant, moves the playhead and edits
   await test.step("lanes per participant and the program lanes follow who speaks", async () => {
     await expect(page.locator('[data-lane="audio"]')).toHaveCount(2);
     await expect(page.locator('[data-lane="camera"]')).toHaveCount(1);
-    await expect(page.locator('[data-lane="screen"]')).toHaveCount(0);
+    await expect(page.locator('[data-lane="screen"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid="pj-tl-screen-p1-ala-span"]')).toHaveCount(2);
     await expect(page.getByTestId("pj-tl-sound")).toHaveAttribute("data-speakers", "Ala|Bob Builder");
     await expect.poll(() => scenes.count()).toBeGreaterThanOrEqual(3);
     const mains = await scenes.evaluateAll((blocks) => blocks.map((block) => (block as HTMLElement).dataset.main ?? ""));
-    expect(mains[0]).not.toMatch(/^card-/);
-    expect(mains[1]).toMatch(/^card-/);
-    expect(mains[2]).toBe(mains[0]);
+    expect(mains.some((main) => main.startsWith("card-"))).toBe(true);
+    expect(mains.some((main) => main.includes("-screen-"))).toBe(true);
+    expect(mains.some((main) => main.includes("-camera-"))).toBe(true);
   });
 
+  const mainAt = (ms: number): Promise<string> =>
+    scenes.evaluateAll((blocks, at) => blocks.map((block) => block as HTMLElement).find((block) => Number(block.dataset.start) <= at && at < Number(block.dataset.end))?.dataset.main ?? "", ms);
   let cardId = "";
   await test.step("a click, the scrubber, the keys and the transcript move the playhead", async () => {
     await clickAt(page, picture, 11_000);
@@ -120,7 +123,8 @@ test("the episode timeline shows every participant, moves the playhead and edits
     await expect.poll(() => playheadMs(page)).toBe(19_000);
     await page.locator('[data-testid="pj-transcript"] .turn-head').first().click();
     await expect.poll(() => playheadMs(page)).toBeLessThan(3000);
-    cardId = (await scenes.nth(1).getAttribute("data-main")) ?? "";
+    cardId = await mainAt(11_000);
+    expect(cardId).toMatch(/^card-/);
   });
 
   await test.step("a selected stretch can show another source, and goes back to automatic", async () => {
@@ -128,7 +132,8 @@ test("the episode timeline shows every participant, moves the playhead and edits
     await expect(page.getByTestId("pj-tl-editor")).toBeVisible();
     await expect(page.getByTestId("pj-tl-sel-source")).toHaveValue(cardId);
     await expect(page.getByTestId("pj-tl-sel-auto")).toBeDisabled();
-    const camera = (await scenes.nth(0).getAttribute("data-main")) ?? "";
+    const camera = await mainAt(15_000);
+    expect(camera).toMatch(/-camera-/);
     await page.getByTestId("pj-tl-sel-source").selectOption(camera);
     await expect(manualScenes.first()).toHaveAttribute("data-main", camera);
     await expect(page.getByTestId("pj-tl-save")).toHaveAttribute("data-status", "saved");
@@ -145,7 +150,7 @@ test("the episode timeline shows every participant, moves the playhead and edits
     await expect(manualScenes.first()).toHaveAttribute("data-main", camera);
     await page.getByTestId("pj-tl-all-auto").click();
     await expect(manualScenes).toHaveCount(0);
-    await expect(scenes.nth(1)).toHaveAttribute("data-main", cardId);
+    await expect.poll(() => mainAt(11_000)).toBe(cardId);
   });
 
   await test.step("a dragged stretch is selected, and the view zooms", async () => {

@@ -310,7 +310,7 @@ export function episodeTimeline(api: ProjectApi, stg: Stage, project: ProjectFil
     const blocks = state.scenes.map((scene) => {
       const main = scene.sources[0] ?? "";
       const names = scene.sources.map(nameOf);
-      const more = scene.layout !== "solo" && scene.sources.length > 1 ? ` +${scene.sources.length - 1}` : "";
+      const sub = [t(`pj.lay.layout.${scene.layout}`), ...(scene.layout === "solo" ? [] : names.slice(1))].join(" · ");
       const owner = sourceOwner(project, main);
       const manual = isManual(scene);
       const block = h(
@@ -325,7 +325,7 @@ export function episodeTimeline(api: ProjectApi, stg: Stage, project: ProjectFil
           "data-layout": scene.layout,
           "data-state": manual ? "manual" : "auto",
         },
-        h("span", { class: "etl-scene-name" }, `${nameOf(main)}${more}`),
+        h("span", { class: "etl-scene-text" }, h("span", { class: "etl-scene-name" }, nameOf(main)), h("span", { class: "etl-scene-sub" }, sub)),
         manual ? h("span", { class: "etl-scene-mark", "aria-hidden": "true" }, "●") : null,
       );
       block.style.setProperty("--etl-c", (owner ? colorOf.get(owner) : undefined) ?? FALLBACK);
